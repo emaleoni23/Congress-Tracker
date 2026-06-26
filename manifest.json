@@ -1,0 +1,27 @@
+{
+  "name": "Congress Trade Tracker",
+  "short_name": "CongressTracker",
+  "description": "Monitora le operazioni finanziarie dei membri del Congresso USA in tempo reale",
+  "start_url": "/Congress-Tracker/",
+  "scope": "/Congress-Tracker/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#050810",
+  "theme_color": "#050810",
+  "icons": [
+    {
+      "src": "icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "categories": ["finance", "news"],
+  "lang": "it"
+}
