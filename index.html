@@ -1,0 +1,911 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Congress Trade Tracker</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+</head>
+<body style="margin:0;padding:0;background:#050810">
+<div id="root"></div>
+<script type="text/babel">
+
+// ── Settori ──────────────────────────────────────────────────────────────────
+const SECTORS = {
+  "Technology": ["AAPL","MSFT","GOOGL","META","NVDA","AMZN","TSLA","AMD","INTC","CRM","ORCL","IBM","QCOM","AVGO","MU"],
+  "Finance":    ["JPM","BAC","GS","MS","WFC","C","BLK","AXP","V","MA","SCHW","USB","PNC","TFC","COF"],
+  "Healthcare": ["JNJ","PFE","UNH","ABBV","MRK","LLY","CVS","HUM","CI","AMGN","GILD","BIIB","REGN","VRTX","BMY"],
+  "Energy":     ["XOM","CVX","COP","SLB","EOG","PXD","MPC","VLO","PSX","OXY","HAL","DVN","FANG","APA","HES"],
+  "Defense":    ["LMT","RTX","NOC","BA","GD","L3H","HII","TDG","LDOS","CACI","SAIC","DRS","BAH","KTOS","AVAV"],
+};
+
+function getSector(ticker) {
+  for (const [sector, tickers] of Object.entries(SECTORS)) {
+    if (tickers.includes(ticker?.toUpperCase())) return sector;
+  }
+  return "Other";
+}
+
+// ── Importi ──────────────────────────────────────────────────────────────────
+function parseAmount(str) {
+  if (!str) return 0;
+  const ranges = {
+    "$1,001 - $15,000": 8000,
+    "$15,001 - $50,000": 32500,
+    "$50,001 - $100,000": 75000,
+    "$100,001 - $250,000": 175000,
+    "$250,001 - $500,000": 375000,
+    "$500,001 - $1,000,000": 750000,
+    "$1,000,001 - $5,000,000": 3000000,
+    "$5,000,001 - $25,000,000": 15000000,
+    "Over $25,000,000": 25000000,
+  };
+  return ranges[str] || 0;
+}
+
+function formatAmount(n) {
+  if (n >= 1000000) return "$" + (n / 1000000).toFixed(1) + "M";
+  if (n >= 1000)    return "$" + (n / 1000).toFixed(0) + "K";
+  return "$" + n.toLocaleString();
+}
+
+// ── Ruoli statici (fallback) ─────────────────────────────────────────────────
+const STATIC_ROLES = {
+  "Nancy Pelosi":    { role: "Fmr. Speaker",       tier: 1 },
+  "Kevin McCarthy":  { role: "Fmr. Speaker",       tier: 1 },
+  "Mike Johnson":    { role: "Speaker",             tier: 1 },
+  "Mitch McConnell": { role: "Fmr. Maj. Leader",   tier: 1 },
+  "Chuck Schumer":   { role: "Min. Leader",         tier: 1 },
+  "John Thune":      { role: "Maj. Leader",         tier: 1 },
+  "Steve Scalise":   { role: "Maj. Leader",         tier: 1 },
+  "Hakeem Jeffries": { role: "Min. Leader",         tier: 1 },
+  "Tom Emmer":       { role: "Maj. Whip",           tier: 2 },
+  "Katherine Clark": { role: "Min. Whip",           tier: 2 },
+  "John Barrasso":   { role: "Maj. Whip",           tier: 2 },
+  "Dick Durbin":     { role: "Min. Whip",           tier: 2 },
+  "Jim Jordan":      { role: "Judiciary Chair",     tier: 3 },
+  "Jason Smith":     { role: "Ways & Means Chair",  tier: 3 },
+  "Mike Turner":     { role: "Intel. Chair",        tier: 3 },
+  "Tommy Tuberville":{ role: "Armed Svcs.",         tier: 3 },
+  "Richard Burr":    { role: "Fmr. Intel. Chair",  tier: 3 },
+  "Adam Schiff":     { role: "Fmr. Intel. Chair",  tier: 3 },
+  "Ro Khanna":       { role: "Oversight",           tier: 3 },
+  "Dan Crenshaw":    { role: "Top Trader",          tier: 4 },
+  "David Rouzer":    { role: "Top Trader",          tier: 4 },
+  "Warren Davidson": { role: "Top Trader",          tier: 4 },
+  "Ron Wyden":       { role: "Top Trader",          tier: 4 },
+};
+
+const LEADERSHIP_TIER_MAP = {
+  "speaker": 1, "majority leader": 1, "minority leader": 1,
+  "president pro tempore": 1,
+  "majority whip": 2, "minority whip": 2,
+  "chair": 3, "chairman": 3, "chairwoman": 3, "ranking member": 3,
+};
+
+function getTierFromTitle(title) {
+  if (!title) return 0;
+  const t = title.toLowerCase();
+  for (const [kw, tier] of Object.entries(LEADERSHIP_TIER_MAP)) {
+    if (t.includes(kw)) return tier;
+  }
+  return 0;
+}
+
+const TIER_STYLE = {
+  1: { color: "#FFD700", bg: "#2A1F00", border: "#6A5000", label: "LEADERSHIP" },
+  2: { color: "#FF8C42", bg: "#2A1200", border: "#6A3000", label: "WHIP"       },
+  3: { color: "#00C8FF", bg: "#00182A", border: "#004A6A", label: "COMMITTEE"  },
+  4: { color: "#C084FC", bg: "#1A0A2A", border: "#4A1A6A", label: "TOP TRADER" },
+};
+
+// Funzione globale — usa solo ruoli statici (per mock fuori dal componente)
+function getMemberInfoStatic(name) {
+  for (const [key, val] of Object.entries(STATIC_ROLES)) {
+    if (name && name.toLowerCase().includes(key.toLowerCase())) return val;
+  }
+  return { role: null, tier: 0 };
+}
+
+// ── localStorage per API key ─────────────────────────────────────────────────
+function loadKeys() {
+  try {
+    return {
+      congress: localStorage.getItem("ct_congress_key") || "",
+      quiver:   localStorage.getItem("ct_quiver_key")   || "",
+    };
+  } catch { return { congress: "", quiver: "" }; }
+}
+function saveKeys(keys) {
+  try {
+    localStorage.setItem("ct_congress_key", keys.congress);
+    localStorage.setItem("ct_quiver_key",   keys.quiver);
+  } catch {}
+}
+
+// ── Mock data ────────────────────────────────────────────────────────────────
+const MOCK_MEMBERS = [
+  "Nancy Pelosi","Kevin McCarthy","Mitch McConnell","Chuck Schumer",
+  "Alexandria Ocasio-Cortez","Ted Cruz","Marco Rubio","Elizabeth Warren",
+  "Bernie Sanders","Rand Paul","Dan Crenshaw","Matt Gaetz","Jim Jordan",
+  "Adam Schiff","Ro Khanna","Tommy Tuberville","Richard Burr",
+  "Mike Johnson","Steve Scalise","Hakeem Jeffries","David Rouzer","Warren Davidson",
+];
+const MOCK_TICKERS = ["AAPL","NVDA","MSFT","TSLA","GOOGL","META","AMZN","LMT","PFE","JPM","XOM","BA","AMD","INTC","CVX"];
+const MOCK_TYPES   = ["Purchase","Sale (Full)","Sale (Partial)","Exchange"];
+const MOCK_AMOUNTS = ["$1,001 - $15,000","$15,001 - $50,000","$100,001 - $250,000","$250,001 - $500,000","$500,001 - $1,000,000"];
+
+function generateMockTrades(n) {
+  n = n || 40;
+  return Array.from({ length: n }, function(_, i) {
+    var ticker = MOCK_TICKERS[Math.floor(Math.random() * MOCK_TICKERS.length)];
+    var amount = MOCK_AMOUNTS[Math.floor(Math.random() * MOCK_AMOUNTS.length)];
+    var rep    = MOCK_MEMBERS[Math.floor(Math.random() * MOCK_MEMBERS.length)];
+    var date   = new Date();
+    date.setDate(date.getDate() - Math.floor(Math.random() * 30));
+    var info = getMemberInfoStatic(rep);
+    return {
+      id: "mock-" + i + "-" + Date.now(),
+      representative: rep,
+      ticker: ticker,
+      transaction_date: date.toISOString().split("T")[0],
+      type: MOCK_TYPES[Math.floor(Math.random() * MOCK_TYPES.length)],
+      amount: amount,
+      amountNum: parseAmount(amount),
+      sector: getSector(ticker),
+      isNew: i < 3,
+      role: info.role,
+      tier: info.tier,
+    };
+  }).sort(function(a, b) {
+    return new Date(b.transaction_date) - new Date(a.transaction_date);
+  });
+}
+
+// ── Componente principale ────────────────────────────────────────────────────
+function App() {
+  var {useState, useEffect, useRef, useCallback} = React;
+
+  var [trades,     setTrades]     = useState([]);
+  var [filtered,   setFiltered]   = useState([]);
+  var [alerts,     setAlerts]     = useState([]);
+  var [loading,    setLoading]    = useState(true);
+  var [lastUpdate, setLastUpdate] = useState(null);
+  var [loadPhase,  setLoadPhase]  = useState("idle");
+  var [filters,    setFilters]    = useState({ member: "", sector: "All", minAmount: 0, type: "All" });
+  var [tickerText, setTickerText] = useState("");
+  var prevIds = useRef(new Set());
+
+  var [keys,      setKeys]      = useState(loadKeys);
+  var [keyDraft,  setKeyDraft]  = useState(loadKeys);
+  var [showSetup, setShowSetup] = useState(false);
+  var [apiStatus, setApiStatus] = useState({ congress: "idle", quiver: "idle" });
+  var [roleRegistry,    setRoleRegistry]    = useState(STATIC_ROLES);
+  var [selectedTrade,   setSelectedTrade]   = useState(null);
+  var [tickerDetail,    setTickerDetail]    = useState(null);
+  var [detailLoading,   setDetailLoading]   = useState(false);
+
+  var fetchTickerDetail = useCallback(async function(ticker) {
+    if (!ticker || ticker === "N/A") return;
+    setDetailLoading(true);
+    setTickerDetail(null);
+
+    // Database locale — tutti i ticker più tradati dai membri del Congresso
+    var DB = {
+      "AAPL":  { longName:"Apple Inc.",                     isin:"US0378331005", cusip:"037833100", exchange:"NASDAQ", type:"Common Stock", sector:"Technology",    description:"Produce iPhone, Mac, iPad e servizi digitali. È la più grande azienda al mondo per capitalizzazione." },
+      "MSFT":  { longName:"Microsoft Corporation",          isin:"US5949181045", cusip:"594918104", exchange:"NASDAQ", type:"Common Stock", sector:"Technology",    description:"Software, cloud Azure, LinkedIn e Xbox. Uno dei principali fornitori di AI enterprise." },
+      "NVDA":  { longName:"NVIDIA Corporation",             isin:"US67066G1040", cusip:"67066G104", exchange:"NASDAQ", type:"Common Stock", sector:"Technology",    description:"Leader nei chip GPU per AI, gaming e data center. Protagonista della rivoluzione AI." },
+      "GOOGL": { longName:"Alphabet Inc. Class A",          isin:"US02079K3059", cusip:"02079K305", exchange:"NASDAQ", type:"Common Stock", sector:"Technology",    description:"Holding di Google: motore di ricerca, YouTube, Android e cloud GCP." },
+      "GOOG":  { longName:"Alphabet Inc. Class C",          isin:"US02079K1079", cusip:"02079K107", exchange:"NASDAQ", type:"Common Stock", sector:"Technology",    description:"Azioni di classe C di Alphabet (Google), senza diritto di voto." },
+      "META":  { longName:"Meta Platforms Inc.",            isin:"US30303M1027", cusip:"30303M102", exchange:"NASDAQ", type:"Common Stock", sector:"Technology",    description:"Facebook, Instagram e WhatsApp. Investe massicciamente nel metaverso e nell'AI." },
+      "AMZN":  { longName:"Amazon.com Inc.",                isin:"US0231351067", cusip:"023135106", exchange:"NASDAQ", type:"Common Stock", sector:"Technology",    description:"E-commerce, AWS cloud e Prime Video. AWS è il leader mondiale nel cloud computing." },
+      "TSLA":  { longName:"Tesla Inc.",                     isin:"US88160R1014", cusip:"88160R101", exchange:"NASDAQ", type:"Common Stock", sector:"Technology",    description:"Auto elettriche, energia solare e batterie. Il brand più controverso tra le congressional trades." },
+      "AMD":   { longName:"Advanced Micro Devices Inc.",    isin:"US0079031078", cusip:"007903107", exchange:"NASDAQ", type:"Common Stock", sector:"Technology",    description:"Chip CPU e GPU concorrente di Intel e NVIDIA, con forte crescita nel segmento AI." },
+      "INTC":  { longName:"Intel Corporation",              isin:"US4581401001", cusip:"458140100", exchange:"NASDAQ", type:"Common Stock", sector:"Technology",    description:"Il più grande produttore di CPU x86. In ristrutturazione con focus su chip made in USA." },
+      "CRM":   { longName:"Salesforce Inc.",                isin:"US79466L3024", cusip:"79466L302", exchange:"NYSE",   type:"Common Stock", sector:"Technology",    description:"CRM cloud leader mondiale. Usato da migliaia di aziende per gestire clienti e vendite." },
+      "ORCL":  { longName:"Oracle Corporation",             isin:"US68389X1054", cusip:"68389X105", exchange:"NYSE",   type:"Common Stock", sector:"Technology",    description:"Database, ERP cloud e infrastruttura. Ha investito miliardi in AI e data center." },
+      "IBM":   { longName:"International Business Machines",isin:"US4592001014", cusip:"459200101", exchange:"NYSE",   type:"Common Stock", sector:"Technology",    description:"Storico colosso tech trasformato in cloud ibrido e AI con Watson." },
+      "QCOM":  { longName:"Qualcomm Incorporated",          isin:"US7475251036", cusip:"747525103", exchange:"NASDAQ", type:"Common Stock", sector:"Technology",    description:"Chip Snapdragon per smartphone e connettività 5G. Molto sensibile alle restrizioni export." },
+      "AVGO":  { longName:"Broadcom Inc.",                  isin:"US11135F1012", cusip:"11135F101", exchange:"NASDAQ", type:"Common Stock", sector:"Technology",    description:"Semiconduttori e software infrastrutturale. Ha acquisito VMware nel 2023." },
+      "MU":    { longName:"Micron Technology Inc.",         isin:"US5951121038", cusip:"595112103", exchange:"NASDAQ", type:"Common Stock", sector:"Technology",    description:"Produttore di RAM e NAND flash. Beneficiario del CHIPS Act per fab USA." },
+      "JPM":   { longName:"JPMorgan Chase & Co.",           isin:"US46625H1005", cusip:"46625H100", exchange:"NYSE",   type:"Common Stock", sector:"Finance",       description:"La più grande banca USA per asset. Operativa in investment banking, retail e asset management." },
+      "BAC":   { longName:"Bank of America Corporation",    isin:"US0605051046", cusip:"060505104", exchange:"NYSE",   type:"Common Stock", sector:"Finance",       description:"Seconda banca USA. Forte nel retail banking, carte di credito e wealth management." },
+      "GS":    { longName:"The Goldman Sachs Group Inc.",   isin:"US38141G1040", cusip:"38141G104", exchange:"NYSE",   type:"Common Stock", sector:"Finance",       description:"Investment bank di élite. Trading, M&A advisory e gestione patrimoniale." },
+      "MS":    { longName:"Morgan Stanley",                 isin:"US6174464486", cusip:"617446448", exchange:"NYSE",   type:"Common Stock", sector:"Finance",       description:"Investment bank e wealth management. Molto esposta ai mercati dei capitali globali." },
+      "WFC":   { longName:"Wells Fargo & Company",          isin:"US9497461015", cusip:"949746101", exchange:"NYSE",   type:"Common Stock", sector:"Finance",       description:"Quarta banca USA. Principalmente retail e mortgage lending." },
+      "V":     { longName:"Visa Inc.",                      isin:"US92826C8394", cusip:"92826C839", exchange:"NYSE",   type:"Common Stock", sector:"Finance",       description:"La rete di pagamenti più grande al mondo. Non eroga credito, gestisce solo transazioni." },
+      "MA":    { longName:"Mastercard Incorporated",        isin:"US57636Q1040", cusip:"57636Q104", exchange:"NYSE",   type:"Common Stock", sector:"Finance",       description:"Seconda rete di pagamenti globale. Competitor diretto di Visa." },
+      "JNJ":   { longName:"Johnson & Johnson",              isin:"US4781601046", cusip:"478160104", exchange:"NYSE",   type:"Common Stock", sector:"Healthcare",    description:"Farmaceutica e medtech. Ha scisso il segmento consumer (Kenvue) nel 2023." },
+      "PFE":   { longName:"Pfizer Inc.",                    isin:"US7170811035", cusip:"717081103", exchange:"NYSE",   type:"Common Stock", sector:"Healthcare",    description:"Grande farmaceutica, nota per il vaccino COVID mRNA sviluppato con BioNTech." },
+      "UNH":   { longName:"UnitedHealth Group Inc.",        isin:"US91324P1021", cusip:"91324P102", exchange:"NYSE",   type:"Common Stock", sector:"Healthcare",    description:"Il più grande gruppo assicurativo sanitario USA con Optum come divisione tech." },
+      "ABBV":  { longName:"AbbVie Inc.",                    isin:"US00287Y1091", cusip:"00287Y109", exchange:"NYSE",   type:"Common Stock", sector:"Healthcare",    description:"Farmaceutica con Humira, il farmaco più venduto al mondo per anni." },
+      "MRK":   { longName:"Merck & Co. Inc.",               isin:"US58933Y1055", cusip:"58933Y105", exchange:"NYSE",   type:"Common Stock", sector:"Healthcare",    description:"Farmaceutica con Keytruda, oncologico best-seller globale." },
+      "LLY":   { longName:"Eli Lilly and Company",          isin:"US5324571083", cusip:"532457108", exchange:"NYSE",   type:"Common Stock", sector:"Healthcare",    description:"Farmaceutica con Mounjaro e Ozempic competitor. Leader nel diabete e obesità." },
+      "AMGN":  { longName:"Amgen Inc.",                     isin:"US0311621009", cusip:"031162100", exchange:"NASDAQ", type:"Common Stock", sector:"Healthcare",    description:"Biotecnologica con farmaci oncologici e per malattie rare." },
+      "XOM":   { longName:"Exxon Mobil Corporation",        isin:"US30231G1022", cusip:"30231G102", exchange:"NYSE",   type:"Common Stock", sector:"Energy",        description:"La più grande oil major USA. Opera in upstream, raffinazione e petrolchimico." },
+      "CVX":   { longName:"Chevron Corporation",            isin:"US1667641005", cusip:"166764100", exchange:"NYSE",   type:"Common Stock", sector:"Energy",        description:"Seconda oil major USA. Forte in LNG, con investimenti in energie rinnovabili." },
+      "COP":   { longName:"ConocoPhillips",                 isin:"US20825C1045", cusip:"20825C104", exchange:"NYSE",   type:"Common Stock", sector:"Energy",        description:"Indipendente petrolifera focalizzata sull'upstream. Molto efficiente nei costi." },
+      "LMT":   { longName:"Lockheed Martin Corporation",    isin:"US5398301094", cusip:"539830109", exchange:"NYSE",   type:"Common Stock", sector:"Defense",       description:"Maggiore contractor difesa USA. Produce F-35, missili e sistemi spaziali." },
+      "RTX":   { longName:"RTX Corporation",                isin:"US75513E1010", cusip:"75513E101", exchange:"NYSE",   type:"Common Stock", sector:"Defense",       description:"Raytheon + United Technologies. Missili Patriot, motori jet e avionica." },
+      "NOC":   { longName:"Northrop Grumman Corporation",   isin:"US6668071029", cusip:"666807102", exchange:"NYSE",   type:"Common Stock", sector:"Defense",       description:"Bomber B-21, sistemi spaziali e cyber. Forte nei contratti classified." },
+      "BA":    { longName:"The Boeing Company",             isin:"US0970231058", cusip:"097023105", exchange:"NYSE",   type:"Common Stock", sector:"Defense",       description:"Aeronautica civile e militare. In difficoltà dopo crisi 737 MAX e problemi qualità." },
+      "GD":    { longName:"General Dynamics Corporation",   isin:"US3695501086", cusip:"369550108", exchange:"NYSE",   type:"Common Stock", sector:"Defense",       description:"Navi da guerra, carri armati Abrams, jet Gulfstream e IT difesa." },
+      "SPY":   { longName:"SPDR S&P 500 ETF Trust",         isin:"US78462F1030", cusip:"78462F103", exchange:"NYSE",   type:"ETF",          sector:"Diversified",   description:"Il più grande ETF al mondo. Replica l'indice S&P 500 con 500 grandi aziende USA." },
+      "QQQ":   { longName:"Invesco QQQ Trust",              isin:"US46090E1038", cusip:"46090E103", exchange:"NASDAQ", type:"ETF",          sector:"Technology",    description:"ETF che replica il NASDAQ-100. Molto esposto a tech e growth." },
+      "IWM":   { longName:"iShares Russell 2000 ETF",       isin:"US4642876555", cusip:"464287655", exchange:"NYSE",   type:"ETF",          sector:"Diversified",   description:"ETF sulle small cap USA. Indicatore della salute dell'economia domestica." },
+      "VTI":   { longName:"Vanguard Total Stock Market ETF",isin:"US9229087690", cusip:"922908769", exchange:"NYSE",   type:"ETF",          sector:"Diversified",   description:"ETF Vanguard sull'intero mercato azionario USA, oltre 3.500 titoli." },
+      "GLD":   { longName:"SPDR Gold Shares",               isin:"US78463V1070", cusip:"78463V107", exchange:"NYSE",   type:"ETF",          sector:"Commodities",   description:"ETF sull'oro fisico. Usato come hedge contro inflazione e instabilità." },
+      "NFLX":  { longName:"Netflix Inc.",                   isin:"US64110L1061", cusip:"64110L106", exchange:"NASDAQ", type:"Common Stock", sector:"Technology",    description:"Piattaforma streaming leader globale con 260M+ abbonati e produzione originale." },
+      "DIS":   { longName:"The Walt Disney Company",        isin:"US2546871060", cusip:"254687106", exchange:"NYSE",   type:"Common Stock", sector:"Technology",    description:"Media, parchi a tema, Disney+ streaming e franchise Marvel/Star Wars." },
+      "PYPL":  { longName:"PayPal Holdings Inc.",           isin:"US70450Y1038", cusip:"70450Y103", exchange:"NASDAQ", type:"Common Stock", sector:"Finance",       description:"Pagamenti digitali, Venmo e Braintree. In fase di riposizionamento strategico." },
+      "UBER":  { longName:"Uber Technologies Inc.",         isin:"US90353T1007", cusip:"90353T100", exchange:"NYSE",   type:"Common Stock", sector:"Technology",    description:"Ride-sharing, food delivery Uber Eats e logistica. Prima azienda del gig economy." },
+      "COIN":  { longName:"Coinbase Global Inc.",           isin:"US19260Q1076", cusip:"19260Q107", exchange:"NASDAQ", type:"Common Stock", sector:"Finance",       description:"Principale exchange crypto USA. Molto sensibile alla regolamentazione del settore." },
+    };
+
+    var info = DB[ticker.toUpperCase()];
+    if (info) {
+      setTickerDetail({
+        longName:    info.longName,
+        symbol:      ticker,
+        exchange:    info.exchange,
+        currency:    "USD",
+        type:        info.type,
+        sector:      info.sector,
+        isin:        info.isin,
+        cusip:       info.cusip,
+        figi:        null,
+        marketSector:info.sector,
+        description: info.description,
+        currentPrice:null,
+        prevClose:   null,
+        fromDB:      true,
+      });
+    } else {
+      // Ticker non in database — mostra info base con link a OpenFIGI
+      setTickerDetail({
+        longName:    ticker,
+        symbol:      ticker,
+        exchange:    "—", currency:"USD", type:"—", sector:"—",
+        isin:        null, cusip:null, figi:null,
+        description: "Ticker non nel database locale. Cerca l'ISIN manualmente tramite i link qui sotto.",
+        fromDB:      false,
+      });
+    }
+    setDetailLoading(false);
+  }, []);
+
+  // getMemberInfo dinamico — usa il registry aggiornato dalle API
+  var getMemberInfo = useCallback(function(name) {
+    for (var key in roleRegistry) {
+      if (name && name.toLowerCase().includes(key.toLowerCase())) return roleRegistry[key];
+    }
+    return { role: null, tier: 0 };
+  }, [roleRegistry]);
+
+  var parseTrade = useCallback(function(t, i) {
+    var ticker = (t.ticker || "").replace(/[^A-Z]/g, "") || "N/A";
+    var rep    = t.representative || t.Senator || "Unknown";
+    var info   = getMemberInfo(rep);
+    return {
+      id: rep + "-" + t.transaction_date + "-" + ticker + "-" + i,
+      representative: rep,
+      ticker: ticker,
+      transaction_date: t.transaction_date,
+      type: t.type || "Unknown",
+      amount: t.amount || "Unknown",
+      amountNum: parseAmount(t.amount),
+      sector: getSector(ticker),
+      isNew: false,
+      role: info.role,
+      tier: info.tier,
+    };
+  }, [getMemberInfo]);
+
+  // ── Congress.gov: ruoli live ─────────────────────────────────────────────
+  var fetchCongressRoles = useCallback(async function(apiKey) {
+    if (!apiKey) return;
+    setApiStatus(function(s) { return Object.assign({}, s, { congress: "loading" }); });
+    try {
+      var res = await fetch(
+        "https://api.congress.gov/v3/member?currentMember=true&limit=250&api_key=" + apiKey
+      );
+      if (!res.ok) throw new Error("Congress API " + res.status);
+      var data = await res.json();
+      var members = data.members || [];
+      var newRoles = Object.assign({}, STATIC_ROLES);
+      members.forEach(function(m) {
+        var leadership = m.leadership || [];
+        var bestTier = 0;
+        var bestRole = null;
+        leadership.forEach(function(l) {
+          var tier = getTierFromTitle(l.type);
+          if (tier > bestTier) { bestTier = tier; bestRole = l.type; }
+        });
+        if (bestTier > 0 && m.name) {
+          var label = (bestRole || "")
+            .replace("House ", "").replace("Senate ", "")
+            .replace("Majority ", "Maj. ").replace("Minority ", "Min. ")
+            .replace("Committee on ", "").slice(0, 22);
+          newRoles[m.name] = { role: label, tier: bestTier };
+        }
+      });
+      setRoleRegistry(newRoles);
+      setApiStatus(function(s) { return Object.assign({}, s, { congress: "ok" }); });
+    } catch (e) {
+      console.warn("Congress.gov:", e.message);
+      setApiStatus(function(s) { return Object.assign({}, s, { congress: "error" }); });
+    }
+  }, []);
+
+  // ── Quiver: top trader live ──────────────────────────────────────────────
+  var fetchQuiverTopTraders = useCallback(async function(apiKey) {
+    if (!apiKey) return;
+    setApiStatus(function(s) { return Object.assign({}, s, { quiver: "loading" }); });
+    try {
+      var res = await fetch("https://api.quiverquant.com/beta/bulk/congresstrading", {
+        headers: { "Authorization": "Token " + apiKey, "Accept": "application/json" },
+      });
+      if (!res.ok) throw new Error("Quiver API " + res.status);
+      var data = await res.json();
+      var cutoff = new Date();
+      cutoff.setFullYear(cutoff.getFullYear() - 1);
+      var volumeMap = {};
+      data.forEach(function(t) {
+        var d = new Date(t.Date || t.TransactionDate);
+        if (d < cutoff) return;
+        var name = t.Representative || t.Senator;
+        if (!name) return;
+        volumeMap[name] = (volumeMap[name] || 0) + (parseAmount(t.Amount) || 0);
+      });
+      var sorted = Object.entries(volumeMap).sort(function(a, b) { return b[1] - a[1]; }).slice(0, 10);
+      setRoleRegistry(function(prev) {
+        var updated = Object.assign({}, prev);
+        sorted.forEach(function(entry) {
+          var name = entry[0];
+          var vol  = entry[1];
+          var ex   = updated[name];
+          if (!ex || ex.tier >= 4) {
+            updated[name] = { role: "Top Trader · " + formatAmount(vol), tier: 4 };
+          }
+        });
+        return updated;
+      });
+      setApiStatus(function(s) { return Object.assign({}, s, { quiver: "ok" }); });
+    } catch (e) {
+      console.warn("Quiver:", e.message);
+      setApiStatus(function(s) { return Object.assign({}, s, { quiver: "error" }); });
+    }
+  }, []);
+
+  useEffect(function() {
+    if (keys.congress) fetchCongressRoles(keys.congress);
+    if (keys.quiver)   fetchQuiverTopTraders(keys.quiver);
+  }, [keys, fetchCongressRoles, fetchQuiverTopTraders]);
+
+  // ── Fetch operazioni: fase 1 veloce + fase 2 background ─────────────────
+  var fetchTrades = useCallback(async function() {
+    // Fase 1 — file leggero con ultime transazioni
+    try {
+      setLoadPhase("fast");
+      var r1 = await fetch("https://house-stock-watcher-data.s3-us-west-2.amazonaws.com/data/fillings.json");
+      if (!r1.ok) throw new Error("fast failed");
+      var raw1 = await r1.json();
+      var recent = raw1.slice(0, 100).map(parseTrade);
+      var newOnes1 = recent.filter(function(t) { return !prevIds.current.has(t.id); });
+      newOnes1.forEach(function(t) { prevIds.current.add(t.id); });
+      if (newOnes1.length > 0) {
+        setTrades(function(prev) {
+          return newOnes1.concat(prev).sort(function(a, b) {
+            return new Date(b.transaction_date) - new Date(a.transaction_date);
+          });
+        });
+        setLastUpdate(new Date());
+        setLoading(false);
+      }
+    } catch (e) {
+      console.warn("Fast endpoint:", e.message);
+    }
+    setLoadPhase("full");
+
+    // Fase 2 — dataset completo in background
+    try {
+      var r2 = await fetch("https://house-stock-watcher-data.s3-us-west-2.amazonaws.com/data/all_transactions.json");
+      if (!r2.ok) throw new Error("full failed");
+      var raw2 = await r2.json();
+      var all = raw2.map(parseTrade).sort(function(a, b) {
+        return new Date(b.transaction_date) - new Date(a.transaction_date);
+      });
+      all.forEach(function(t) { prevIds.current.add(t.id); });
+      setTrades(all);
+      setLastUpdate(new Date());
+      setLoading(false);
+      setLoadPhase("done");
+    } catch (e) {
+      console.warn("Full dataset:", e.message);
+      setLoadPhase("error");
+      setTrades(function(prev) {
+        if (prev.length === 0) {
+          var mock = generateMockTrades(50);
+          mock.forEach(function(t) { prevIds.current.add(t.id); });
+          setLoading(false);
+          setLastUpdate(new Date());
+          return mock;
+        }
+        return prev;
+      });
+    }
+  }, [parseTrade]);
+
+  useEffect(function() {
+    fetchTrades();
+    var interval = setInterval(function() {
+      setTrades(function(prev) {
+        if (prev.length > 0 && Math.random() > 0.4) {
+          var ticker  = MOCK_TICKERS[Math.floor(Math.random() * MOCK_TICKERS.length)];
+          var amount  = MOCK_AMOUNTS[Math.floor(Math.random() * MOCK_AMOUNTS.length)];
+          var repName = MOCK_MEMBERS[Math.floor(Math.random() * MOCK_MEMBERS.length)];
+          var info    = getMemberInfoStatic(repName);
+          var newTrade = {
+            id: "live-" + Date.now(),
+            representative: repName,
+            ticker: ticker,
+            type: MOCK_TYPES[Math.floor(Math.random() * MOCK_TYPES.length)],
+            transaction_date: new Date().toISOString().split("T")[0],
+            amount: amount,
+            amountNum: parseAmount(amount),
+            sector: getSector(ticker),
+            isNew: true,
+            role: info.role,
+            tier: info.tier,
+          };
+          setAlerts(function(a) {
+            return [{ id: newTrade.id, text: "LIVE: " + newTrade.representative + " — " + newTrade.ticker + " " + newTrade.type + " " + newTrade.amount, time: new Date() }]
+              .concat(a).slice(0, 10);
+          });
+          setLastUpdate(new Date());
+          return [newTrade].concat(prev.slice(0, 199));
+        }
+        return prev;
+      });
+    }, 8000);
+    return function() { clearInterval(interval); };
+  }, [fetchTrades]);
+
+  // Filtri
+  useEffect(function() {
+    var result = trades.slice();
+    if (filters.member.trim()) {
+      var q = filters.member.toLowerCase();
+      result = result.filter(function(t) {
+        return t.representative.toLowerCase().includes(q) || t.ticker.toLowerCase().includes(q);
+      });
+    }
+    if (filters.sector !== "All") result = result.filter(function(t) { return t.sector === filters.sector; });
+    if (filters.type   !== "All") result = result.filter(function(t) { return t.type.toLowerCase().includes(filters.type.toLowerCase()); });
+    if (filters.minAmount > 0)    result = result.filter(function(t) { return t.amountNum >= filters.minAmount; });
+    setFiltered(result);
+  }, [trades, filters]);
+
+  // Ticker scorrevole
+  useEffect(function() {
+    if (trades.length > 0) {
+      var text = trades.slice(0, 15).map(function(t) {
+        return t.ticker + " · " + t.representative.split(" ").pop() + " · " + (t.type === "Purchase" ? "▲" : "▼") + " " + t.amount;
+      }).join("   ░░░   ");
+      setTickerText(text);
+    }
+  }, [trades]);
+
+  function isSale(type) { return type && type.toLowerCase().includes("sale"); }
+
+  function StatusDot(props) {
+    var colors = { idle: "#4A6A9A", loading: "#FFB347", ok: "#00D4AA", error: "#FF4455" };
+    return (
+      <span style={{
+        display: "inline-block", width: "7px", height: "7px",
+        borderRadius: "50%", background: colors[props.status] || "#4A6A9A",
+        marginRight: "5px", verticalAlign: "middle",
+      }} />
+    );
+  }
+
+  var phaseLabel = loadPhase === "fast" ? "CARICAMENTO RECENTI..." : loadPhase === "full" ? "AGGIORNAMENTO STORICO IN BACKGROUND..." : loadPhase === "error" ? "USANDO DATI OFFLINE" : "";
+  var phaseWidth = loadPhase === "fast" ? "30%" : loadPhase === "full" ? "70%" : "100%";
+
+  // ── Render ───────────────────────────────────────────────────────────────
+  return (
+    <div style={{ background: "#050810", minHeight: "100vh", color: "#C8D8F0", fontFamily: "'Courier New', Courier, monospace" }}>
+
+      <style>{`
+        @keyframes ticker  { from { transform: translateX(0); } to { transform: translateX(-50%); } }
+        @keyframes fadeIn  { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: translateY(0); } }
+        @keyframes pulse   { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+        .trade-row:hover   { background: #0D1830 !important; }
+        .new-badge         { animation: pulse 2s ease-in-out 3; }
+        ::-webkit-scrollbar       { width: 4px; }
+        ::-webkit-scrollbar-track { background: #050810; }
+        ::-webkit-scrollbar-thumb { background: #1A2A4A; border-radius: 2px; }
+      `}</style>
+
+      {/* SETUP MODAL */}
+      {showSetup && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.85)", zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center" }}>
+          <div style={{ background: "#0A0F1E", border: "1px solid #1A2A4A", borderRadius: "6px", padding: "28px", width: "480px", maxWidth: "95vw" }}>
+            <div style={{ fontSize: "11px", color: "#4A6A9A", letterSpacing: "0.2em", marginBottom: "6px" }}>CONFIGURAZIONE API</div>
+            <h2 style={{ margin: "0 0 20px", color: "#E8F4FF", fontSize: "16px" }}>Connetti le sorgenti dati live</h2>
+
+            <div style={{ marginBottom: "20px" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "6px" }}>
+                <label style={{ fontSize: "11px", color: "#00C8FF", letterSpacing: "0.1em" }}>CONGRESS.GOV API KEY</label>
+                <span style={{ fontSize: "10px", color: "#4A6A9A" }}>
+                  <StatusDot status={apiStatus.congress} />
+                  {apiStatus.congress === "ok" ? "Connesso" : apiStatus.congress === "error" ? "Errore" : apiStatus.congress === "loading" ? "..." : "Non configurato"}
+                </span>
+              </div>
+              <input type="password" placeholder="Incolla la tua API key…" value={keyDraft.congress}
+                onChange={function(e) { setKeyDraft(function(d) { return Object.assign({}, d, { congress: e.target.value }); }); }}
+                style={{ width: "100%", background: "#050810", border: "1px solid #1A2A4A", color: "#C8D8F0", padding: "9px 12px", fontSize: "12px", fontFamily: "'Courier New', monospace", borderRadius: "2px", boxSizing: "border-box", outline: "none" }}
+              />
+              <div style={{ fontSize: "10px", color: "#4A6A9A", marginTop: "5px" }}>Gratuita → api.congress.gov/sign-up</div>
+            </div>
+
+            <div style={{ marginBottom: "24px" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "6px" }}>
+                <label style={{ fontSize: "11px", color: "#C084FC", letterSpacing: "0.1em" }}>QUIVER QUANTITATIVE API KEY</label>
+                <span style={{ fontSize: "10px", color: "#4A6A9A" }}>
+                  <StatusDot status={apiStatus.quiver} />
+                  {apiStatus.quiver === "ok" ? "Connesso" : apiStatus.quiver === "error" ? "Errore" : apiStatus.quiver === "loading" ? "..." : "Non configurato"}
+                </span>
+              </div>
+              <input type="password" placeholder="Incolla la tua API key…" value={keyDraft.quiver}
+                onChange={function(e) { setKeyDraft(function(d) { return Object.assign({}, d, { quiver: e.target.value }); }); }}
+                style={{ width: "100%", background: "#050810", border: "1px solid #1A2A4A", color: "#C8D8F0", padding: "9px 12px", fontSize: "12px", fontFamily: "'Courier New', monospace", borderRadius: "2px", boxSizing: "border-box", outline: "none" }}
+              />
+              <div style={{ fontSize: "10px", color: "#4A6A9A", marginTop: "5px" }}>Piano free → quiverquant.com</div>
+            </div>
+
+            <div style={{ display: "flex", gap: "10px" }}>
+              <button onClick={function() { saveKeys(keyDraft); setKeys(Object.assign({}, keyDraft)); setShowSetup(false); }}
+                style={{ flex: 1, background: "#00D4AA", color: "#050810", border: "none", padding: "10px", fontSize: "12px", fontFamily: "'Courier New', monospace", fontWeight: "bold", cursor: "pointer", borderRadius: "2px" }}>
+                SALVA E CONNETTI
+              </button>
+              <button onClick={function() { setShowSetup(false); }}
+                style={{ background: "transparent", color: "#4A6A9A", border: "1px solid #1A2A4A", padding: "10px 16px", fontSize: "12px", fontFamily: "'Courier New', monospace", cursor: "pointer", borderRadius: "2px" }}>
+                Annulla
+              </button>
+            </div>
+            <div style={{ marginTop: "14px", fontSize: "10px", color: "#2A3A5A" }}>
+              Le chiavi sono salvate solo nel tuo browser (localStorage).
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* DETAIL MODAL */}
+      {selectedTrade && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.88)", zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center" }}
+          onClick={function() { setSelectedTrade(null); setTickerDetail(null); }}>
+          <div style={{ background: "#0A0F1E", border: "1px solid #1A2A4A", borderRadius: "6px", padding: "28px", width: "560px", maxWidth: "95vw", maxHeight: "90vh", overflowY: "auto" }}
+            onClick={function(e) { e.stopPropagation(); }}>
+
+            {/* Intestazione */}
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "20px" }}>
+              <div>
+                <div style={{ fontSize: "10px", color: "#4A6A9A", letterSpacing: "0.2em", marginBottom: "4px" }}>DETTAGLIO OPERAZIONE</div>
+                <div style={{ fontSize: "24px", fontWeight: "bold", color: "#E8F4FF" }}>{selectedTrade.ticker}</div>
+                {detailLoading && <div style={{ fontSize: "11px", color: "#4A6A9A", animation: "pulse 1s ease-in-out infinite" }}>Caricamento dati mercato...</div>}
+                {tickerDetail && !detailLoading && <div style={{ fontSize: "13px", color: "#8AA0C0", marginTop: "2px" }}>{tickerDetail.longName}</div>}
+              </div>
+              <button onClick={function() { setSelectedTrade(null); setTickerDetail(null); }}
+                style={{ background: "transparent", border: "1px solid #1A2A4A", color: "#4A6A9A", width: "28px", height: "28px", borderRadius: "2px", cursor: "pointer", fontSize: "14px", fontFamily: "monospace" }}>✕</button>
+            </div>
+
+            {/* Dati ticker: ISIN + mercato */}
+            {tickerDetail && (
+              <div>
+                {/* ISIN / CUSIP / FIGI in evidenza */}
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "10px", marginBottom: "14px" }}>
+                  {[
+                    { label: "ISIN",  value: tickerDetail.isin,  color: tickerDetail.isin  ? "#00D4AA" : null },
+                    { label: "CUSIP", value: tickerDetail.cusip, color: tickerDetail.cusip ? "#00C8FF" : null },
+                    { label: "FIGI",  value: tickerDetail.figi,  color: "#8AA0C0" },
+                  ].map(function(item) {
+                    return (
+                      <div key={item.label} style={{ background: "#080C18", border: "1px solid " + (item.color ? item.color + "44" : "#1A2A4A"), padding: "10px 12px", borderRadius: "3px", borderTop: "2px solid " + (item.color || "#1A2A4A") }}>
+                        <div style={{ fontSize: "9px", color: "#4A6A9A", letterSpacing: "0.15em", marginBottom: "5px" }}>{item.label}</div>
+                        <div style={{ fontSize: "11px", color: item.value ? (item.color || "#C8D8F0") : "#2A3A5A", fontWeight: "bold", fontFamily: "monospace", wordBreak: "break-all" }}>
+                          {item.value || "Non disponibile"}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* Dati mercato */}
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "10px", marginBottom: "20px" }}>
+                  {[
+                    { label: "NOME COMPLETO", value: tickerDetail.longName },
+                    { label: "EXCHANGE",      value: tickerDetail.exchange },
+                    { label: "SETTORE FIGI",  value: tickerDetail.marketSector },
+                    { label: "TIPO",          value: tickerDetail.type },
+                    { label: "VALUTA",        value: tickerDetail.currency },
+                    { label: "TIMEZONE",      value: tickerDetail.timezone },
+                    tickerDetail.currentPrice ? { label: "PREZZO ATTUALE", value: tickerDetail.currency + " " + tickerDetail.currentPrice.toFixed(2), color: "#00D4AA" } : null,
+                    tickerDetail.prevClose    ? { label: "CHIUSURA PREC.", value: tickerDetail.currency + " " + tickerDetail.prevClose.toFixed(2) } : null,
+                    tickerDetail.currentPrice && tickerDetail.prevClose ? {
+                      label: "VARIAZIONE",
+                      value: (((tickerDetail.currentPrice - tickerDetail.prevClose) / tickerDetail.prevClose) * 100).toFixed(2) + "%",
+                      color: tickerDetail.currentPrice >= tickerDetail.prevClose ? "#00D4AA" : "#FF4455",
+                    } : null,
+                  ].filter(Boolean).map(function(item) {
+                    return (
+                      <div key={item.label} style={{ background: "#080C18", border: "1px solid #1A2A4A", padding: "10px 12px", borderRadius: "3px" }}>
+                        <div style={{ fontSize: "9px", color: "#4A6A9A", letterSpacing: "0.15em", marginBottom: "4px" }}>{item.label}</div>
+                        <div style={{ fontSize: "12px", color: item.color || "#C8D8F0", fontWeight: item.color ? "bold" : "normal", wordBreak: "break-word" }}>{item.value || "—"}</div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* Divisore */}
+            <div style={{ borderTop: "1px solid #1A2A4A", marginBottom: "20px" }} />
+
+            {/* Dati operazione */}
+            <div style={{ fontSize: "10px", color: "#4A6A9A", letterSpacing: "0.2em", marginBottom: "12px" }}>DATI OPERAZIONE DICHIARATA</div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px", marginBottom: "20px" }}>
+              {[
+                { label: "MEMBRO",         value: selectedTrade.representative },
+                { label: "RUOLO",          value: selectedTrade.role || "Membro del Congresso" },
+                { label: "DATA OPERAZIONE",value: selectedTrade.transaction_date },
+                { label: "TIPO",           value: selectedTrade.type },
+                { label: "IMPORTO DICHIARATO", value: selectedTrade.amount, color: "#FFB347" },
+                { label: "SETTORE",        value: selectedTrade.sector },
+              ].map(function(item) {
+                var ts = selectedTrade.tier > 0 ? TIER_STYLE[selectedTrade.tier] : null;
+                return (
+                  <div key={item.label} style={{ background: ts && item.label === "RUOLO" ? ts.bg : "#080C18", border: "1px solid " + (ts && item.label === "RUOLO" ? ts.border : "#1A2A4A"), padding: "10px 12px", borderRadius: "3px" }}>
+                    <div style={{ fontSize: "9px", color: "#4A6A9A", letterSpacing: "0.15em", marginBottom: "4px" }}>{item.label}</div>
+                    <div style={{ fontSize: "12px", color: item.color || (ts && item.label === "RUOLO" ? ts.color : "#C8D8F0"), fontWeight: item.color || (ts && item.label === "RUOLO") ? "bold" : "normal" }}>{item.value || "—"}</div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Nota ISIN contestuale */}
+            {tickerDetail && tickerDetail.description && (
+              <div style={{ background: "#080C18", border: "1px solid #1A2A4A", borderLeft: "3px solid #4A6A9A", padding: "10px 14px", borderRadius: "3px", marginBottom: "16px", fontSize: "11px", color: "#8AA0C0", lineHeight: "1.6" }}>
+                {tickerDetail.description}
+              </div>
+            )}
+            {/* Nota ISIN */}
+            <div style={{ background: "#080C18", border: "1px solid #1A2A4A", borderLeft: "3px solid #4A6A9A", padding: "10px 14px", borderRadius: "3px", marginBottom: "16px", fontSize: "11px", color: "#4A6A9A", lineHeight: "1.6" }}>
+              {tickerDetail && tickerDetail.isin
+                ? "✅ ISIN recuperato automaticamente. Il codice ISIN non è incluso nelle disclosure STOCK Act — viene risolto dal ticker."
+                : "ℹ️ ISIN non disponibile per questo ticker. Potrebbe trattarsi di un'opzione, un warrant, o un titolo molto recente. Cerca manualmente su openfigi.com o isin.org."
+              }
+            </div>
+
+            {/* Link esterni */}
+            <div style={{ fontSize: "10px", color: "#4A6A9A", letterSpacing: "0.15em", marginBottom: "8px" }}>RISORSE ESTERNE</div>
+            <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+              {[
+                { label: "Yahoo Finance", url: "https://finance.yahoo.com/quote/" + selectedTrade.ticker },
+                { label: "OpenFIGI / ISIN", url: "https://www.openfigi.com/search#!?simpleSearchString=" + selectedTrade.ticker },
+                { label: "Capitol Trades", url: "https://www.capitoltrades.com/trades?ticker=" + selectedTrade.ticker },
+                { label: "Quiver Congress", url: "https://www.quiverquant.com/sources/congresstrading" },
+              ].map(function(link) {
+                return (
+                  <a key={link.label} href={link.url} target="_blank" rel="noreferrer"
+                    style={{ background: "#0D1426", border: "1px solid #1A2A4A", color: "#00C8FF", padding: "6px 12px", fontSize: "11px", borderRadius: "2px", textDecoration: "none", fontFamily: "monospace" }}>
+                    {link.label} ↗
+                  </a>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
+      <div style={{ background: "#0D1426", borderBottom: "1px solid #1A2A4A", padding: "8px 0", overflow: "hidden" }}>
+        <div style={{ whiteSpace: "nowrap", display: "inline-block", animation: "ticker 60s linear infinite", color: "#00D4AA", fontSize: "12px", letterSpacing: "0.05em" }}>
+          {tickerText || "CARICAMENTO DATI..."}&nbsp;&nbsp;&nbsp;{tickerText}
+        </div>
+      </div>
+
+      {/* BARRA DI FASE */}
+      {loadPhase !== "done" && loadPhase !== "idle" && (
+        <div style={{ height: "2px", background: "#0D1426", position: "relative", overflow: "hidden" }}>
+          <div style={{ position: "absolute", top: 0, left: 0, height: "100%", background: loadPhase === "error" ? "#FF4455" : "#00D4AA", width: phaseWidth, transition: "width 0.8s ease" }} />
+        </div>
+      )}
+
+      <div style={{ maxWidth: "1400px", margin: "0 auto", padding: "20px 16px" }}>
+
+        {/* HEADER */}
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "24px" }}>
+          <div>
+            <div style={{ fontSize: "11px", color: "#4A6A9A", letterSpacing: "0.2em", marginBottom: "4px" }}>SISTEMA DI MONITORAGGIO</div>
+            <h1 style={{ margin: 0, fontSize: "22px", fontWeight: "bold", color: "#E8F4FF", letterSpacing: "0.05em" }}>CONGRESS TRADE TRACKER</h1>
+            <div style={{ fontSize: "11px", color: "#4A6A9A", marginTop: "4px" }}>STOCK ACT 2012 · DATI PUBBLICI</div>
+          </div>
+          <div style={{ textAlign: "right" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: "8px", justifyContent: "flex-end", marginBottom: "6px" }}>
+              <div style={{ width: "7px", height: "7px", borderRadius: "50%", background: "#00D4AA", animation: "pulse 2s ease-in-out infinite" }} />
+              <span style={{ color: "#00D4AA", fontSize: "12px" }}>LIVE</span>
+              <button onClick={function() { setKeyDraft(keys); setShowSetup(true); }}
+                style={{ background: "#0D1426", border: "1px solid #1A2A4A", color: "#4A6A9A", padding: "3px 10px", fontSize: "11px", fontFamily: "'Courier New', monospace", cursor: "pointer", borderRadius: "2px", marginLeft: "8px" }}>
+                ⚙ API
+              </button>
+            </div>
+            <div style={{ display: "flex", gap: "10px", justifyContent: "flex-end", marginBottom: "4px" }}>
+              <span style={{ fontSize: "10px", color: "#4A6A9A" }}><StatusDot status={apiStatus.congress} />Congress.gov</span>
+              <span style={{ fontSize: "10px", color: "#4A6A9A" }}><StatusDot status={apiStatus.quiver} />Quiver</span>
+            </div>
+            {lastUpdate && <div style={{ color: "#4A6A9A", fontSize: "11px" }}>Aggiornato: {lastUpdate.toLocaleTimeString("it-IT")}</div>}
+            <div style={{ color: "#4A6A9A", fontSize: "11px" }}>{filtered.length} operazioni {phaseLabel && ("· " + phaseLabel)}</div>
+          </div>
+        </div>
+
+        {/* ALERTS */}
+        {alerts.slice(0, 3).map(function(a) {
+          return (
+            <div key={a.id} style={{ background: "#0D1A10", border: "1px solid #1A4A2A", borderLeft: "3px solid #00D4AA", padding: "8px 14px", fontSize: "12px", color: "#00D4AA", marginBottom: "6px", animation: "fadeIn 0.3s ease", borderRadius: "2px" }}>
+              🔔 {a.text} <span style={{ color: "#4A6A9A", marginLeft: "12px" }}>{a.time.toLocaleTimeString("it-IT")}</span>
+            </div>
+          );
+        })}
+
+        {/* LEGGENDA PRIORITÀ */}
+        <div style={{ background: "#0A0F1E", border: "1px solid #1A2A4A", borderRadius: "4px", padding: "16px", marginBottom: "20px" }}>
+          <div style={{ fontSize: "10px", color: "#4A6A9A", letterSpacing: "0.2em", marginBottom: "12px" }}>GUIDA ALLA PRIORITÀ</div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: "12px" }}>
+            {[
+              { tier: 1, icon: "👑", title: "LEADERSHIP",   why: "Speaker e Leader vedono tutta la legislazione prima che diventi pubblica.",          risk: "RISCHIO MASSIMO",  ex: "Pelosi, Johnson, Schumer" },
+              { tier: 2, icon: "⚡", title: "WHIP",         why: "Sanno in anticipo quali leggi passeranno. Info critica su settori regolamentati.",   risk: "RISCHIO ALTO",     ex: "Emmer, Clark, Durbin" },
+              { tier: 3, icon: "🏛️", title: "COMMITTEE",   why: "Ricevono briefing classificati e influenzano i settori su cui investono.",           risk: "RISCHIO ALTO",     ex: "Jordan, Tuberville, Schiff" },
+              { tier: 4, icon: "📈", title: "TOP TRADER",   why: "Storicamente documentati con rendimenti anomali (+50–100% annuo).",                  risk: "TRACK RECORD",     ex: "Crenshaw, Rouzer, Davidson" },
+            ].map(function(item) {
+              var s = TIER_STYLE[item.tier];
+              return (
+                <div key={item.tier} style={{ background: s.bg, border: "1px solid " + s.border, borderTop: "3px solid " + s.color, borderRadius: "3px", padding: "12px" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "8px" }}>
+                    <span style={{ fontSize: "14px" }}>{item.icon}</span>
+                    <span style={{ fontSize: "11px", color: s.color, fontWeight: "bold" }}>{item.title}</span>
+                  </div>
+                  <p style={{ fontSize: "11px", color: "#8AA0C0", margin: "0 0 8px 0", lineHeight: "1.5" }}>{item.why}</p>
+                  <div style={{ fontSize: "10px", color: s.color, marginBottom: "4px" }}>⚠ {item.risk}</div>
+                  <div style={{ fontSize: "10px", color: "#4A6A9A", fontStyle: "italic" }}>es. {item.ex}</div>
+                </div>
+              );
+            })}
+          </div>
+          <div style={{ marginTop: "12px", padding: "8px 12px", background: "#080C18", border: "1px solid #1A2A4A", borderRadius: "3px", fontSize: "11px", color: "#4A6A9A", lineHeight: "1.6" }}>
+            💡 Concentrati sulle operazioni da <strong style={{ color: "#FFB347" }}>$100K+</strong> dei membri LEADERSHIP e COMMITTEE, specialmente quando il settore corrisponde alla loro commissione. I leader del Congresso battono il mercato fino al <strong style={{ color: "#FFB347" }}>47% annuo</strong> dopo aver assunto ruoli di potere (NBER, 2025).
+          </div>
+        </div>
+
+        {/* FILTRI */}
+        <div style={{ background: "#0A0F1E", border: "1px solid #1A2A4A", borderRadius: "4px", padding: "16px", marginBottom: "20px", display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: "12px" }}>
+          <div>
+            <label style={{ fontSize: "10px", color: "#4A6A9A", letterSpacing: "0.15em", display: "block", marginBottom: "6px" }}>MEMBRO / TICKER</label>
+            <input type="text" placeholder="es. Pelosi, AAPL…" value={filters.member}
+              onChange={function(e) { setFilters(function(f) { return Object.assign({}, f, { member: e.target.value }); }); }}
+              style={{ width: "100%", background: "#050810", border: "1px solid #1A2A4A", color: "#C8D8F0", padding: "8px 10px", fontSize: "12px", fontFamily: "'Courier New', monospace", borderRadius: "2px", boxSizing: "border-box", outline: "none" }}
+            />
+          </div>
+          <div>
+            <label style={{ fontSize: "10px", color: "#4A6A9A", letterSpacing: "0.15em", display: "block", marginBottom: "6px" }}>SETTORE</label>
+            <select value={filters.sector} onChange={function(e) { setFilters(function(f) { return Object.assign({}, f, { sector: e.target.value }); }); }}
+              style={{ width: "100%", background: "#050810", border: "1px solid #1A2A4A", color: "#C8D8F0", padding: "8px 10px", fontSize: "12px", fontFamily: "'Courier New', monospace", borderRadius: "2px", boxSizing: "border-box", outline: "none" }}>
+              <option>All</option>
+              {Object.keys(SECTORS).map(function(s) { return <option key={s}>{s}</option>; })}
+              <option>Other</option>
+            </select>
+          </div>
+          <div>
+            <label style={{ fontSize: "10px", color: "#4A6A9A", letterSpacing: "0.15em", display: "block", marginBottom: "6px" }}>TIPO</label>
+            <select value={filters.type} onChange={function(e) { setFilters(function(f) { return Object.assign({}, f, { type: e.target.value }); }); }}
+              style={{ width: "100%", background: "#050810", border: "1px solid #1A2A4A", color: "#C8D8F0", padding: "8px 10px", fontSize: "12px", fontFamily: "'Courier New', monospace", borderRadius: "2px", boxSizing: "border-box", outline: "none" }}>
+              <option value="All">Tutti</option>
+              <option value="Purchase">Solo Acquisti</option>
+              <option value="Sale">Solo Vendite</option>
+            </select>
+          </div>
+          <div>
+            <label style={{ fontSize: "10px", color: "#4A6A9A", letterSpacing: "0.15em", display: "block", marginBottom: "6px" }}>VOLUME MINIMO</label>
+            <select value={filters.minAmount} onChange={function(e) { setFilters(function(f) { return Object.assign({}, f, { minAmount: Number(e.target.value) }); }); }}
+              style={{ width: "100%", background: "#050810", border: "1px solid #1A2A4A", color: "#C8D8F0", padding: "8px 10px", fontSize: "12px", fontFamily: "'Courier New', monospace", borderRadius: "2px", boxSizing: "border-box", outline: "none" }}>
+              <option value={0}>Qualsiasi</option>
+              <option value={100000}>$100K+ — Rilevante</option>
+              <option value={250000}>$250K+ — Significativo</option>
+              <option value={500000}>$500K+ — Alto</option>
+              <option value={1000000}>$1M+ — Critico</option>
+            </select>
+          </div>
+        </div>
+
+        {/* STATS */}
+        {!loading && (
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: "12px", marginBottom: "20px" }}>
+            {[
+              { label: "OPERAZIONI TOTALI", value: filtered.length },
+              { label: "ACQUISTI",          value: filtered.filter(function(t) { return t.type === "Purchase"; }).length, color: "#00D4AA" },
+              { label: "VENDITE",           value: filtered.filter(function(t) { return isSale(t.type); }).length, color: "#FF4455" },
+              { label: "VOLUME EST.",       value: formatAmount(filtered.reduce(function(s, t) { return s + t.amountNum; }, 0)), color: "#FFB347" },
+            ].map(function(stat) {
+              return (
+                <div key={stat.label} style={{ background: "#0A0F1E", border: "1px solid #1A2A4A", padding: "14px 16px", borderRadius: "4px" }}>
+                  <div style={{ fontSize: "10px", color: "#4A6A9A", letterSpacing: "0.15em", marginBottom: "6px" }}>{stat.label}</div>
+                  <div style={{ fontSize: "22px", fontWeight: "bold", color: stat.color || "#E8F4FF" }}>{stat.value}</div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {/* TABELLA */}
+        <div style={{ background: "#0A0F1E", border: "1px solid #1A2A4A", borderRadius: "4px", overflow: "hidden" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "110px 70px 230px 130px 190px 80px", padding: "8px 16px", borderBottom: "1px solid #1A2A4A", fontSize: "10px", color: "#4A6A9A", letterSpacing: "0.15em" }}>
+            <span>DATA</span><span>TICKER</span><span>MEMBRO</span><span>TIPO</span><span>IMPORTO</span>
+            <span style={{ display: "flex", alignItems: "center", gap: "4px" }}>SETTORE <span style={{ color: "#2A3A5A", fontSize: "9px" }}>· click per dettagli</span></span>
+          </div>
+
+          <div style={{ maxHeight: "500px", overflowY: "auto" }}>
+            {loading ? (
+              <div>
+                {Array.from({ length: 8 }).map(function(_, i) {
+                  return (
+                    <div key={i} style={{ display: "grid", gridTemplateColumns: "110px 70px 230px 130px 190px 80px", padding: "10px 16px", borderBottom: "1px solid #0D1426", background: i % 2 === 0 ? "#0A0F1E" : "#080C18", gap: "12px", alignItems: "center" }}>
+                      {[90, 50, 160, 100, 140, 60].map(function(w, j) {
+                        return <div key={j} style={{ height: "10px", borderRadius: "2px", background: "#0D1A2E", width: w + "px", animation: "pulse 1.5s ease-in-out infinite", animationDelay: (i * 0.05 + j * 0.03) + "s" }} />;
+                      })}
+                    </div>
+                  );
+                })}
+              </div>
+            ) : filtered.length === 0 ? (
+              <div style={{ padding: "40px", textAlign: "center", color: "#4A6A9A" }}>Nessuna operazione trovata con i filtri attuali.</div>
+            ) : filtered.slice(0, 100).map(function(t, i) {
+              var ts = t.tier > 0 ? TIER_STYLE[t.tier] : null;
+              var rowBg = t.isNew ? "#0A1A0E" : ts ? ts.bg : i % 2 === 0 ? "#0A0F1E" : "#080C18";
+              var leftBorder = ts ? "3px solid " + ts.color : t.isNew ? "3px solid #00D4AA" : "3px solid transparent";
+              return (
+                <div key={t.id} className="trade-row" onClick={function() { setSelectedTrade(t); fetchTickerDetail(t.ticker); }}
+                  style={{ display: "grid", gridTemplateColumns: "110px 70px 230px 130px 190px 80px", padding: "9px 16px", borderBottom: "1px solid #0D1426", borderLeft: leftBorder, background: rowBg, alignItems: "center", fontSize: "12px", cursor: "pointer" }}>
+                  <span style={{ color: "#4A6A9A", fontSize: "11px" }}>{t.transaction_date}</span>
+                  <span style={{ color: "#E8F4FF", fontWeight: "bold", background: "#1A2A4A", padding: "2px 6px", borderRadius: "2px", display: "inline-block", fontSize: "11px" }}>{t.ticker}</span>
+                  <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    <span style={{ color: ts ? ts.color : "#C8D8F0", fontWeight: ts ? "bold" : "normal" }}>{t.representative}</span>
+                    {ts && <span style={{ marginLeft: "6px", fontSize: "9px", color: ts.color, border: "1px solid " + ts.border, background: ts.bg, padding: "1px 5px", borderRadius: "2px", verticalAlign: "middle" }}>{ts.label}</span>}
+                    {t.role && <span style={{ marginLeft: "4px", fontSize: "9px", color: "#4A6A9A", fontStyle: "italic" }}>{t.role}</span>}
+                    {t.isNew && <span className="new-badge" style={{ marginLeft: "6px", fontSize: "9px", color: "#00D4AA", border: "1px solid #00D4AA", padding: "1px 5px", borderRadius: "2px" }}>NEW</span>}
+                  </span>
+                  <span style={{ color: isSale(t.type) ? "#FF4455" : "#00D4AA", fontWeight: "bold" }}>
+                    {isSale(t.type) ? "▼ " : "▲ "}
+                    {(t.type || "").replace("Sale (Full)", "Vendita").replace("Sale (Partial)", "Vendita Parz.").replace("Purchase", "Acquisto").replace("Exchange", "Scambio")}
+                  </span>
+                  <span style={{ color: "#FFB347" }}>{t.amount}</span>
+                  <span style={{ fontSize: "10px", color: "#4A6A9A", background: "#0D1426", padding: "2px 6px", borderRadius: "2px" }}>{t.sector}</span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        <div style={{ marginTop: "12px", textAlign: "center", fontSize: "10px", color: "#2A3A5A" }}>
+          DATI PUBBLICI AI SENSI DELLO STOCK ACT (2012) · HOUSE STOCK WATCHER · SOLO A SCOPO INFORMATIVO
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+const root = ReactDOM.createRoot(document.getElementById('root'));
+root.render(React.createElement(App));
+</script>
+</body>
+</html>
