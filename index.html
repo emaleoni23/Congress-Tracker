@@ -286,6 +286,9 @@ function App(){
   var pfs=useState(loadPortfolio); var portfolio=pfs[0]; var setPortfolio=pfs[1];
   var chs=useState(loadCash); var cash=chs[0]; var setCash=chs[1];
   var atms=useState(null); var addTradeModal=atms[0]; var setAddTradeModal=atms[1];
+  var mps=useState(false); var showManual=mps[0]; var setShowManual=mps[1];
+  var mts=useState(""); var manualTicker=mts[0]; var setManualTicker=mts[1];
+  var mds=useState("Purchase"); var manualType=mds[0]; var setManualType=mds[1];
   var ias=useState(""); var investAmt=ias[0]; var setInvestAmt=ias[1];
   var eps=useState(""); var entryPriceStr=eps[0]; var setEntryPriceStr=eps[1];
   var lps2=useState({}); var livePrices=lps2[0]; var setLivePrices=lps2[1];
@@ -487,9 +490,14 @@ function App(){
         h("div",null,
           h("div",{style:{fontSize:"11px",color:"#4A6A9A",letterSpacing:"0.2em",marginBottom:"4px"}},"SIMULATORE"),
           h("h1",{style:{fontSize:"20px",fontWeight:"bold",color:"#E8F4FF"}},"IL MIO PORTFOLIO"),
-          h("div",{style:{display:"flex",alignItems:"center",gap:"8px",marginTop:"6px"}},
-            h("div",{style:{width:"7px",height:"7px",borderRadius:"50%",background:pricesLoading?"#FFB347":"#00D4AA",animation:pricesLoading?"pulse 1s ease-in-out infinite":"none"}}),
-            h("span",{style:{fontSize:"10px",color:"#4A6A9A"}},pricesLoading?"Aggiornamento prezzi...":lastPriceUpdate?"Prezzi live: "+lastPriceUpdate.toLocaleTimeString("it-IT"):"In attesa di prezzi...")
+          h("div",{style:{display:"flex",alignItems:"center",gap:"12px",marginTop:"6px"}},
+            h("div",{style:{display:"flex",alignItems:"center",gap:"8px"}},
+              h("div",{style:{width:"7px",height:"7px",borderRadius:"50%",background:pricesLoading?"#FFB347":"#00D4AA",animation:pricesLoading?"pulse 1s ease-in-out infinite":"none"}}),
+              h("span",{style:{fontSize:"10px",color:"#4A6A9A"}},pricesLoading?"Aggiornamento prezzi...":lastPriceUpdate?"Prezzi live: "+lastPriceUpdate.toLocaleTimeString("it-IT"):"In attesa di prezzi...")
+            ),
+            h("button",{onClick:function(){setManualTicker("");setManualType("Purchase");setInvestAmt("");setEntryPriceStr("");setShowManual(true);},
+              style:{background:"#0A0F1E",border:"1px solid #00D4AA",color:"#00D4AA",padding:"4px 12px",fontSize:"11px",cursor:"pointer",borderRadius:"2px",letterSpacing:"0.1em"}},
+              "+ POSIZIONE MANUALE")
           )
         ),
         h("div",{style:{textAlign:"right"}},
@@ -820,7 +828,84 @@ function App(){
     );
   }
 
-  // ── Add to Portfolio Modal ────────────────────────────────────────────────
+  // ── Manual Position Modal ─────────────────────────────────────────────────
+  function ManualModal(){
+    if(!showManual) return null;
+    var lp=livePrices[manualTicker.toUpperCase()];
+    var shares=parseFloat(investAmt)>0&&parseFloat(entryPriceStr)>0?(parseFloat(investAmt)/parseFloat(entryPriceStr)).toFixed(4):"—";
+    return h("div",{style:{position:"fixed",inset:0,background:"rgba(0,0,0,0.92)",zIndex:200,display:"flex",alignItems:"center",justifyContent:"center"}},
+      h("div",{style:{background:"#0A0F1E",border:"1px solid #00D4AA",borderRadius:"6px",padding:"28px",width:"420px",maxWidth:"95vw"}},
+        h("div",{style:{fontSize:"10px",color:"#4A6A9A",letterSpacing:"0.2em",marginBottom:"6px"}},"POSIZIONE MANUALE"),
+        h("h2",{style:{margin:"0 0 20px",color:"#E8F4FF",fontSize:"18px"}},"Aggiungi una posizione"),
+
+        h("div",{style:{marginBottom:"16px"}},
+          h("label",{style:{fontSize:"10px",color:"#4A6A9A",letterSpacing:"0.15em",display:"block",marginBottom:"6px"}},"TICKER"),
+          h("input",{type:"text",placeholder:"es. BTC-USD, AAPL, TSLA…",value:manualTicker,
+            onChange:function(e){setManualTicker(e.target.value.toUpperCase());},
+            onBlur:function(){
+              if(manualTicker.length>0){
+                fetch(PRICE_PROXY+'?ticker='+manualTicker.toUpperCase())
+                  .then(function(r){return r.ok?r.json():Promise.reject();})
+                  .then(function(data){
+                    if(data.ok&&data.price){
+                      var u={};u[manualTicker.toUpperCase()]=data.price;
+                      setLivePrices(function(p){return Object.assign({},p,u);});
+                      setEntryPriceStr(data.price.toFixed(2));
+                    }
+                  }).catch(function(){});
+              }
+            },
+            style:{width:"100%",background:"#050810",border:"1px solid #1A2A4A",color:"#E8F4FF",padding:"10px 12px",fontSize:"14px",borderRadius:"2px",boxSizing:"border-box",outline:"none",textTransform:"uppercase"}})
+        ),
+
+        h("div",{style:{marginBottom:"16px"}},
+          h("label",{style:{fontSize:"10px",color:"#4A6A9A",letterSpacing:"0.15em",display:"block",marginBottom:"6px"}},"TIPO POSIZIONE"),
+          h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"8px"}},
+            h("button",{onClick:function(){setManualType("Purchase");},style:{background:manualType==="Purchase"?"#00D4AA":"transparent",color:manualType==="Purchase"?"#050810":"#00D4AA",border:"1px solid #00D4AA",padding:"10px",fontSize:"12px",fontWeight:"bold",cursor:"pointer",borderRadius:"2px"}},"▲ LONG"),
+            h("button",{onClick:function(){setManualType("Sale (Full)");},style:{background:manualType!=="Purchase"?"#FF4455":"transparent",color:manualType!=="Purchase"?"#050810":"#FF4455",border:"1px solid #FF4455",padding:"10px",fontSize:"12px",fontWeight:"bold",cursor:"pointer",borderRadius:"2px"}},"▼ SHORT")
+          )
+        ),
+
+        h("div",{style:{marginBottom:"16px"}},
+          h("label",{style:{fontSize:"10px",color:"#4A6A9A",letterSpacing:"0.15em",display:"block",marginBottom:"6px"}},"QUANTO VUOI INVESTIRE ($)"),
+          h("input",{type:"number",placeholder:"es. 1000",value:investAmt,
+            onChange:function(e){setInvestAmt(e.target.value);},
+            style:{width:"100%",background:"#050810",border:"1px solid #1A2A4A",color:"#E8F4FF",padding:"10px 12px",fontSize:"14px",borderRadius:"2px",boxSizing:"border-box",outline:"none"}}),
+          h("div",{style:{fontSize:"10px",color:"#4A6A9A",marginTop:"5px"}},"Liquidità: ",h("span",{style:{color:"#00D4AA"}},"$"+cash.toLocaleString()))
+        ),
+
+        h("div",{style:{marginBottom:"20px"}},
+          h("label",{style:{fontSize:"10px",color:"#4A6A9A",letterSpacing:"0.15em",display:"block",marginBottom:"6px"}},"PREZZO DI ENTRATA ($)"),
+          h("input",{type:"number",placeholder:lp?"Live: $"+lp.toFixed(2):"Inserisci ticker per prezzo live",value:entryPriceStr,
+            onChange:function(e){setEntryPriceStr(e.target.value);},
+            style:{width:"100%",background:"#050810",border:"1px solid #1A2A4A",color:"#E8F4FF",padding:"10px 12px",fontSize:"14px",borderRadius:"2px",boxSizing:"border-box",outline:"none"}}),
+          lp&&!entryPriceStr&&h("button",{onClick:function(){setEntryPriceStr(lp.toFixed(2));},
+            style:{marginTop:"6px",background:"transparent",border:"1px solid #1A2A4A",color:"#00D4AA",padding:"4px 10px",fontSize:"11px",cursor:"pointer",borderRadius:"2px"}},"Usa prezzo live $"+lp.toFixed(2))
+        ),
+
+        investAmt&&entryPriceStr&&h("div",{style:{background:"#080C18",border:"1px solid #1A2A4A",padding:"10px 14px",borderRadius:"3px",marginBottom:"16px",fontSize:"12px",color:"#8AA0C0"}},
+          manualType==="Purchase"?"▲ LONG: ":"▼ SHORT: ",
+          h("strong",{style:{color:"#E8F4FF"}},shares+" unità")," di "+manualTicker+" a $"+parseFloat(entryPriceStr).toFixed(2)
+        ),
+
+        h("div",{style:{display:"flex",gap:"10px"}},
+          h("button",{onClick:function(){
+            var amt=parseFloat(investAmt);
+            var price=parseFloat(entryPriceStr);
+            if(amt>0&&price>0&&manualTicker.length>0){
+              var fakeTrade={ticker:manualTicker.toUpperCase(),representative:"Posizione manuale",
+                sector:getSector(manualTicker.toUpperCase()),type:manualType,
+                transaction_date:new Date().toISOString().split("T")[0],
+                anomaly:{score:0,level:"—"}};
+              addToPortfolio(fakeTrade,amt,price);
+              setShowManual(false);
+            }
+          },style:{flex:1,background:"#00D4AA",color:"#050810",border:"none",padding:"12px",fontSize:"13px",fontWeight:"bold",cursor:"pointer",borderRadius:"2px"}},"AGGIUNGI"),
+          h("button",{onClick:function(){setShowManual(false);},style:{background:"transparent",color:"#4A6A9A",border:"1px solid #1A2A4A",padding:"12px 16px",fontSize:"12px",cursor:"pointer",borderRadius:"2px"}},"Annulla")
+        )
+      )
+    );
+  }
   function AddTradeModal(){
     if(!addTradeModal) return null;
     var t=addTradeModal; var lp=livePrices[t.ticker];
@@ -896,6 +981,7 @@ function App(){
     ),
     SetupModal(),
     DetailModal(),
+    ManualModal(),
     AddTradeModal(),
     page==="portfolio"?h(PortfolioPage,null):h(TrackerPage,null)
   );
