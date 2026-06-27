@@ -4,1264 +4,899 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>Congress Trade Tracker</title>
-
-<!-- PWA -->
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#050810">
-<meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="CongressTracker">
 <link rel="apple-touch-icon" href="icon-192.png">
-<link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
-<link rel="icon" type="image/png" sizes="512x512" href="icon-512.png">
-
-<!-- Splashscreen color iOS -->
-<meta name="msapplication-TileColor" content="#050810">
-<meta name="msapplication-TileImage" content="icon-192.png">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#050810;color:#C8D8F0;font-family:'Courier New',monospace}
+@keyframes ticker{from{transform:translateX(0)}to{transform:translateX(-50%)}}
+@keyframes fadeIn{from{opacity:0;transform:translateY(-8px)}to{opacity:1;transform:translateY(0)}}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.4}}
+@keyframes glow{0%,100%{box-shadow:0 0 6px #FF4455}50%{box-shadow:0 0 14px #FF4455}}
+.trade-row:hover{background:#0D1830!important;cursor:pointer}
+.new-badge{animation:pulse 2s ease-in-out 3}
+::-webkit-scrollbar{width:4px}
+::-webkit-scrollbar-track{background:#050810}
+::-webkit-scrollbar-thumb{background:#1A2A4A;border-radius:2px}
+input,select,button{font-family:'Courier New',monospace}
+</style>
 </head>
-<body style="margin:0;padding:0;background:#050810">
+<body>
 <div id="root"></div>
-<script type="text/babel">
+<script>
+var h = React.createElement;
+var useState   = React.useState;
+var useEffect  = React.useEffect;
+var useRef     = React.useRef;
+var useCallback= React.useCallback;
 
-// ── Settori ──────────────────────────────────────────────────────────────────
-const SECTORS = {
+// ── Helpers ──────────────────────────────────────────────────────────────────
+var SECTORS = {
   "Technology": ["AAPL","MSFT","GOOGL","META","NVDA","AMZN","TSLA","AMD","INTC","CRM","ORCL","IBM","QCOM","AVGO","MU"],
   "Finance":    ["JPM","BAC","GS","MS","WFC","C","BLK","AXP","V","MA","SCHW","USB","PNC","TFC","COF"],
   "Healthcare": ["JNJ","PFE","UNH","ABBV","MRK","LLY","CVS","HUM","CI","AMGN","GILD","BIIB","REGN","VRTX","BMY"],
   "Energy":     ["XOM","CVX","COP","SLB","EOG","PXD","MPC","VLO","PSX","OXY","HAL","DVN","FANG","APA","HES"],
   "Defense":    ["LMT","RTX","NOC","BA","GD","L3H","HII","TDG","LDOS","CACI","SAIC","DRS","BAH","KTOS","AVAV"],
 };
-
-function getSector(ticker) {
-  for (const [sector, tickers] of Object.entries(SECTORS)) {
-    if (tickers.includes(ticker?.toUpperCase())) return sector;
-  }
+function getSector(ticker){
+  if(!ticker) return "Other";
+  for(var s in SECTORS){ if(SECTORS[s].indexOf(ticker.toUpperCase())!==-1) return s; }
   return "Other";
 }
+function parseAmount(str){
+  if(!str) return 0;
+  var r={"$1,001 - $15,000":8000,"$15,001 - $50,000":32500,"$50,001 - $100,000":75000,
+    "$100,001 - $250,000":175000,"$250,001 - $500,000":375000,"$500,001 - $1,000,000":750000,
+    "$1,000,001 - $5,000,000":3000000,"$5,000,001 - $25,000,000":15000000,"Over $25,000,000":25000000};
+  return r[str]||0;
+}
+function fmtAmt(n){
+  if(n>=1000000) return "$"+(n/1000000).toFixed(1)+"M";
+  if(n>=1000)    return "$"+(n/1000).toFixed(0)+"K";
+  return "$"+n.toLocaleString();
+}
+function fmtPct(p){
+  if(p===null) return null;
+  if(p>=10) return p.toFixed(1)+"%";
+  if(p>=1)  return p.toFixed(2)+"%";
+  return p.toFixed(3)+"%";
+}
+function isSale(t){ return t&&t.toLowerCase().indexOf("sale")!==-1; }
+function daysBetween(d1,d2){ return Math.abs((new Date(d1)-new Date(d2))/(86400000)); }
 
-// ── Importi ──────────────────────────────────────────────────────────────────
-function parseAmount(str) {
-  if (!str) return 0;
-  const ranges = {
-    "$1,001 - $15,000": 8000,
-    "$15,001 - $50,000": 32500,
-    "$50,001 - $100,000": 75000,
-    "$100,001 - $250,000": 175000,
-    "$250,001 - $500,000": 375000,
-    "$500,001 - $1,000,000": 750000,
-    "$1,000,001 - $5,000,000": 3000000,
-    "$5,000,001 - $25,000,000": 15000000,
-    "Over $25,000,000": 25000000,
-  };
-  return ranges[str] || 0;
+// ── Static role data ──────────────────────────────────────────────────────────
+var STATIC_ROLES={
+  "Nancy Pelosi":{role:"Fmr. Speaker",tier:1},"Kevin McCarthy":{role:"Fmr. Speaker",tier:1},
+  "Mike Johnson":{role:"Speaker",tier:1},"Mitch McConnell":{role:"Fmr. Maj. Leader",tier:1},
+  "Chuck Schumer":{role:"Min. Leader",tier:1},"John Thune":{role:"Maj. Leader",tier:1},
+  "Steve Scalise":{role:"Maj. Leader",tier:1},"Hakeem Jeffries":{role:"Min. Leader",tier:1},
+  "Tom Emmer":{role:"Maj. Whip",tier:2},"Katherine Clark":{role:"Min. Whip",tier:2},
+  "John Barrasso":{role:"Maj. Whip",tier:2},"Dick Durbin":{role:"Min. Whip",tier:2},
+  "Jim Jordan":{role:"Judiciary Chair",tier:3},"Jason Smith":{role:"Ways & Means Chair",tier:3},
+  "Mike Turner":{role:"Intel. Chair",tier:3},"Tommy Tuberville":{role:"Armed Svcs.",tier:3},
+  "Richard Burr":{role:"Fmr. Intel. Chair",tier:3},"Adam Schiff":{role:"Fmr. Intel. Chair",tier:3},
+  "Ro Khanna":{role:"Oversight",tier:3},"Dan Crenshaw":{role:"Top Trader",tier:4},
+  "David Rouzer":{role:"Top Trader",tier:4},"Warren Davidson":{role:"Top Trader",tier:4},
+  "Ron Wyden":{role:"Top Trader",tier:4},
+};
+var TIER_STYLE={
+  1:{color:"#FFD700",bg:"#2A1F00",border:"#6A5000",label:"LEADERSHIP"},
+  2:{color:"#FF8C42",bg:"#2A1200",border:"#6A3000",label:"WHIP"},
+  3:{color:"#00C8FF",bg:"#00182A",border:"#004A6A",label:"COMMITTEE"},
+  4:{color:"#C084FC",bg:"#1A0A2A",border:"#4A1A6A",label:"TOP TRADER"},
+};
+function getMemberInfo(name,registry){
+  var reg=registry||STATIC_ROLES;
+  for(var k in reg){ if(name&&name.toLowerCase().indexOf(k.toLowerCase())!==-1) return reg[k]; }
+  return {role:null,tier:0};
 }
 
-function formatAmount(n) {
-  if (n >= 1000000) return "$" + (n / 1000000).toFixed(1) + "M";
-  if (n >= 1000)    return "$" + (n / 1000).toFixed(0) + "K";
-  return "$" + n.toLocaleString();
-}
-
-// ── Patrimoni netti stimati (fonti: OpenSecrets, financial disclosures) ──────
-const NET_WORTH = {
-  "Nancy Pelosi":        133000000,
-  "Paul Pelosi":         133000000,
-  "Mitch McConnell":      35000000,
-  "Chuck Schumer":         1000000,
-  "Kevin McCarthy":        1500000,
-  "Mike Johnson":           100000,
-  "Steve Scalise":         1000000,
-  "Hakeem Jeffries":        500000,
-  "Dan Crenshaw":          2000000,
-  "David Rouzer":         12000000,
-  "Warren Davidson":       2500000,
-  "Ron Wyden":             8000000,
-  "Jim Jordan":             500000,
-  "Tommy Tuberville":     11000000,
-  "Adam Schiff":           1500000,
-  "Ro Khanna":            18000000,
-  "Ted Cruz":              4000000,
-  "Marco Rubio":            800000,
-  "Elizabeth Warren":      8000000,
-  "Bernie Sanders":        3000000,
-  "Rand Paul":             2500000,
-  "Alexandria Ocasio-Cortez": 200000,
-  "Rick Scott":          260000000,
-  "Mark Warner":         214000000,
-  "John Hoeven":          18000000,
-  "Greg Gianforte":      135000000,
-  "Darrell Issa":         90000000,
-  "Scott Peters":         80000000,
-  "Alan Lowenthal":       18000000,
-  "Michael McCaul":       50000000,
-  "Glenn Thompson":        2000000,
-  "Patrick McHenry":       2000000,
-  "Virginia Foxx":         4000000,
-  "Mike Turner":           2000000,
-  "Jason Smith":           1000000,
-  "Richard Burr":          4000000,
-  "Kelly Loeffler":      500000000,
-  "David Perdue":         15000000,
+// ── ISIN Database ─────────────────────────────────────────────────────────────
+var ISIN_DB={
+  "AAPL":{longName:"Apple Inc.",isin:"US0378331005",cusip:"037833100",exchange:"NASDAQ",type:"Common Stock",sector:"Technology",description:"Produce iPhone, Mac, iPad e servizi digitali."},
+  "MSFT":{longName:"Microsoft Corporation",isin:"US5949181045",cusip:"594918104",exchange:"NASDAQ",type:"Common Stock",sector:"Technology",description:"Software, cloud Azure, LinkedIn e Xbox."},
+  "NVDA":{longName:"NVIDIA Corporation",isin:"US67066G1040",cusip:"67066G104",exchange:"NASDAQ",type:"Common Stock",sector:"Technology",description:"Leader nei chip GPU per AI, gaming e data center."},
+  "GOOGL":{longName:"Alphabet Inc. Class A",isin:"US02079K3059",cusip:"02079K305",exchange:"NASDAQ",type:"Common Stock",sector:"Technology",description:"Holding di Google: motore di ricerca, YouTube, Android."},
+  "META":{longName:"Meta Platforms Inc.",isin:"US30303M1027",cusip:"30303M102",exchange:"NASDAQ",type:"Common Stock",sector:"Technology",description:"Facebook, Instagram e WhatsApp."},
+  "AMZN":{longName:"Amazon.com Inc.",isin:"US0231351067",cusip:"023135106",exchange:"NASDAQ",type:"Common Stock",sector:"Technology",description:"E-commerce, AWS cloud e Prime Video."},
+  "TSLA":{longName:"Tesla Inc.",isin:"US88160R1014",cusip:"88160R101",exchange:"NASDAQ",type:"Common Stock",sector:"Technology",description:"Auto elettriche, energia solare e batterie."},
+  "AMD":{longName:"Advanced Micro Devices Inc.",isin:"US0079031078",cusip:"007903107",exchange:"NASDAQ",type:"Common Stock",sector:"Technology",description:"Chip CPU e GPU, forte crescita nel segmento AI."},
+  "INTC":{longName:"Intel Corporation",isin:"US4581401001",cusip:"458140100",exchange:"NASDAQ",type:"Common Stock",sector:"Technology",description:"Il più grande produttore di CPU x86."},
+  "JPM":{longName:"JPMorgan Chase & Co.",isin:"US46625H1005",cusip:"46625H100",exchange:"NYSE",type:"Common Stock",sector:"Finance",description:"La più grande banca USA per asset."},
+  "BAC":{longName:"Bank of America Corporation",isin:"US0605051046",cusip:"060505104",exchange:"NYSE",type:"Common Stock",sector:"Finance",description:"Seconda banca USA."},
+  "GS":{longName:"The Goldman Sachs Group Inc.",isin:"US38141G1040",cusip:"38141G104",exchange:"NYSE",type:"Common Stock",sector:"Finance",description:"Investment bank di élite."},
+  "V":{longName:"Visa Inc.",isin:"US92826C8394",cusip:"92826C839",exchange:"NYSE",type:"Common Stock",sector:"Finance",description:"La rete di pagamenti più grande al mondo."},
+  "MA":{longName:"Mastercard Incorporated",isin:"US57636Q1040",cusip:"57636Q104",exchange:"NYSE",type:"Common Stock",sector:"Finance",description:"Seconda rete di pagamenti globale."},
+  "JNJ":{longName:"Johnson & Johnson",isin:"US4781601046",cusip:"478160104",exchange:"NYSE",type:"Common Stock",sector:"Healthcare",description:"Farmaceutica e medtech."},
+  "PFE":{longName:"Pfizer Inc.",isin:"US7170811035",cusip:"717081103",exchange:"NYSE",type:"Common Stock",sector:"Healthcare",description:"Grande farmaceutica, vaccino COVID mRNA."},
+  "UNH":{longName:"UnitedHealth Group Inc.",isin:"US91324P1021",cusip:"91324P102",exchange:"NYSE",type:"Common Stock",sector:"Healthcare",description:"Il più grande gruppo assicurativo sanitario USA."},
+  "LLY":{longName:"Eli Lilly and Company",isin:"US5324571083",cusip:"532457108",exchange:"NYSE",type:"Common Stock",sector:"Healthcare",description:"Leader nel diabete e obesità con Mounjaro."},
+  "XOM":{longName:"Exxon Mobil Corporation",isin:"US30231G1022",cusip:"30231G102",exchange:"NYSE",type:"Common Stock",sector:"Energy",description:"La più grande oil major USA."},
+  "CVX":{longName:"Chevron Corporation",isin:"US1667641005",cusip:"166764100",exchange:"NYSE",type:"Common Stock",sector:"Energy",description:"Seconda oil major USA."},
+  "LMT":{longName:"Lockheed Martin Corporation",isin:"US5398301094",cusip:"539830109",exchange:"NYSE",type:"Common Stock",sector:"Defense",description:"Maggiore contractor difesa USA. Produce F-35."},
+  "RTX":{longName:"RTX Corporation",isin:"US75513E1010",cusip:"75513E101",exchange:"NYSE",type:"Common Stock",sector:"Defense",description:"Raytheon + United Technologies. Missili Patriot."},
+  "NOC":{longName:"Northrop Grumman Corporation",isin:"US6668071029",cusip:"666807102",exchange:"NYSE",type:"Common Stock",sector:"Defense",description:"Bomber B-21, sistemi spaziali e cyber."},
+  "BA":{longName:"The Boeing Company",isin:"US0970231058",cusip:"097023105",exchange:"NYSE",type:"Common Stock",sector:"Defense",description:"Aeronautica civile e militare."},
+  "GD":{longName:"General Dynamics Corporation",isin:"US3695501086",cusip:"369550108",exchange:"NYSE",type:"Common Stock",sector:"Defense",description:"Navi da guerra, carri armati Abrams, Gulfstream."},
+  "SPY":{longName:"SPDR S&P 500 ETF Trust",isin:"US78462F1030",cusip:"78462F103",exchange:"NYSE",type:"ETF",sector:"Diversified",description:"Il più grande ETF al mondo. Replica S&P 500."},
+  "QQQ":{longName:"Invesco QQQ Trust",isin:"US46090E1038",cusip:"46090E103",exchange:"NASDAQ",type:"ETF",sector:"Technology",description:"ETF che replica il NASDAQ-100."},
+  "GLD":{longName:"SPDR Gold Shares",isin:"US78463V1070",cusip:"78463V107",exchange:"NYSE",type:"ETF",sector:"Commodities",description:"ETF sull'oro fisico."},
+  "NFLX":{longName:"Netflix Inc.",isin:"US64110L1061",cusip:"64110L106",exchange:"NASDAQ",type:"Common Stock",sector:"Technology",description:"Piattaforma streaming leader globale."},
+  "COIN":{longName:"Coinbase Global Inc.",isin:"US19260Q1076",cusip:"19260Q107",exchange:"NASDAQ",type:"Common Stock",sector:"Finance",description:"Principale exchange crypto USA."},
 };
 
-function getNetWorth(name) {
-  for (var key in NET_WORTH) {
-    if (name && name.toLowerCase().includes(key.toLowerCase())) return NET_WORTH[key];
-  }
-  return null;
-}
-
-function calcWealthPct(amountNum, netWorth) {
-  if (!netWorth || !amountNum) return null;
-  return (amountNum / netWorth) * 100;
-}
-
-function formatPct(pct) {
-  if (pct === null) return null;
-  if (pct >= 10)   return pct.toFixed(1) + "%";
-  if (pct >= 1)    return pct.toFixed(2) + "%";
-  if (pct >= 0.01) return pct.toFixed(3) + "%";
-  return "<0.001%";
-}
-
-// ── Tipo strumento (azione, opzione, ecc.) ────────────────────────────────────
-function parseInstrument(type, description) {
-  var src = ((type || "") + " " + (description || "")).toLowerCase();
-  if (src.includes("call option") || src.includes("call"))         return { label: "CALL",   color: "#00D4AA", desc: "Opzione Call — diritto di acquisto a prezzo fisso. Leva al rialzo." };
-  if (src.includes("put option")  || src.includes("put"))          return { label: "PUT",    color: "#FF4455", desc: "Opzione Put — diritto di vendita a prezzo fisso. Leva al ribasso." };
-  if (src.includes("option"))                                       return { label: "OPTION", color: "#FFB347", desc: "Opzione — strumento derivato con leva finanziaria." };
-  if (src.includes("etf") || src.includes("fund"))                 return { label: "ETF",    color: "#00C8FF", desc: "ETF — fondo indicizzato, nessuna leva implicita." };
-  if (src.includes("bond") || src.includes("treasury") || src.includes("note")) return { label: "BOND", color: "#8AA0C0", desc: "Obbligazione — strumento a reddito fisso." };
-  if (src.includes("reit"))                                         return { label: "REIT",   color: "#C084FC", desc: "REIT — fondo immobiliare quotato." };
-  return { label: "STOCK", color: "#C8D8F0", desc: "Azione ordinaria — nessuna leva implicita." };
-}
-
-
-// ══════════════════════════════════════════════════════════════════════════════
-// ALGORITMO ANOMALIA INSIDER TRADING — 3 fattori, max 100 punti
-// ══════════════════════════════════════════════════════════════════════════════
-
-// Mappa commissione → settori influenzati
-const COMMITTEE_SECTORS = {
-  "Armed Svcs.":        ["Defense", "Technology", "Energy"],
-  "Intel. Chair":       ["Technology", "Defense", "Finance"],
-  "Fmr. Intel. Chair":  ["Technology", "Defense", "Finance"],
-  "Judiciary Chair":    ["Technology", "Finance"],
-  "Ways & Means Chair": ["Finance", "Healthcare"],
-  "Oversight":          ["Technology", "Finance", "Healthcare"],
-  "Maj. Leader":        ["Technology", "Finance", "Healthcare", "Energy", "Defense"],
-  "Min. Leader":        ["Technology", "Finance", "Healthcare", "Energy", "Defense"],
-  "Fmr. Speaker":       ["Technology", "Finance", "Healthcare", "Energy", "Defense"],
-  "Speaker":            ["Technology", "Finance", "Healthcare", "Energy", "Defense"],
-  "Maj. Whip":          ["Technology", "Finance", "Healthcare", "Energy", "Defense"],
-  "Min. Whip":          ["Technology", "Finance", "Healthcare", "Energy", "Defense"],
-  "Fmr. Maj. Leader":   ["Technology", "Finance", "Healthcare", "Energy", "Defense"],
-  "Top Trader":         [],
+// ── Anomaly algorithm ─────────────────────────────────────────────────────────
+var COMMITTEE_SECTORS={
+  "Armed Svcs.":["Defense","Technology","Energy"],
+  "Intel. Chair":["Technology","Defense","Finance"],
+  "Fmr. Intel. Chair":["Technology","Defense","Finance"],
+  "Judiciary Chair":["Technology","Finance"],
+  "Ways & Means Chair":["Finance","Healthcare"],
+  "Oversight":["Technology","Finance","Healthcare"],
+  "Maj. Leader":["Technology","Finance","Healthcare","Energy","Defense"],
+  "Min. Leader":["Technology","Finance","Healthcare","Energy","Defense"],
+  "Fmr. Speaker":["Technology","Finance","Healthcare","Energy","Defense"],
+  "Speaker":["Technology","Finance","Healthcare","Energy","Defense"],
+  "Maj. Whip":["Technology","Finance","Healthcare","Energy","Defense"],
+  "Min. Whip":["Technology","Finance","Healthcare","Energy","Defense"],
+  "Fmr. Maj. Leader":["Technology","Finance","Healthcare","Energy","Defense"],
 };
-
-// Legislazione recente per settore (titolo, data approvazione/discussione)
-const RECENT_LEGISLATION = [
-  { sector: "Technology", title: "AI Act / Export Controls AI", date: "2024-10-15", desc: "Restrizioni export chip AI verso Cina" },
-  { sector: "Technology", title: "CHIPS and Science Act (estensioni)", date: "2024-08-01", desc: "Sussidi fab semiconduttori USA" },
-  { sector: "Technology", title: "TikTok Ban / Divestiture Bill", date: "2024-04-23", desc: "Obbligo cessione TikTok da ByteDance" },
-  { sector: "Defense",    title: "NDAA 2025 Authorization", date: "2024-12-01", desc: "Autorizzazione spesa difesa $895B" },
-  { sector: "Defense",    title: "Ukraine Aid Package", date: "2024-04-20", desc: "Pacchetto aiuti militari $61B" },
-  { sector: "Healthcare", title: "Drug Price Negotiation (IRA)", date: "2024-09-01", desc: "CMS negozia prezzi farmaci Medicare" },
-  { sector: "Healthcare", title: "Medicare Advantage Cuts", date: "2024-04-01", desc: "CMS riduce rimborsi Medicare Advantage" },
-  { sector: "Finance",    title: "Basel III Endgame Rules", date: "2024-07-01", desc: "Nuovi requisiti capitale banche" },
-  { sector: "Finance",    title: "Crypto Regulation (FIT21)", date: "2024-05-22", desc: "Framework regolatorio per crypto assets" },
-  { sector: "Energy",     title: "LNG Export Pause Review", date: "2024-05-01", desc: "Pausa autorizzazioni export LNG" },
-  { sector: "Energy",     title: "IRA Clean Energy Credits", date: "2024-01-01", desc: "Implementazione crediti energia pulita" },
-  { sector: "Technology", title: "Nvidia Export Controls Update", date: "2025-01-13", desc: "Nuove restrizioni chip AI avanzati" },
-  { sector: "Defense",    title: "NDAA 2026 Authorization", date: "2025-11-01", desc: "Proposta budget difesa 2026" },
-  { sector: "Finance",    title: "DOGE / Federal Spending Cuts", date: "2025-02-01", desc: "Tagli spesa federale impatto mercati" },
-  { sector: "Healthcare", title: "GLP-1 Medicare Coverage", date: "2025-03-01", desc: "Proposta copertura Medicare farmaci obesità" },
+var RECENT_LEGISLATION=[
+  {sector:"Technology",title:"AI Export Controls",date:"2024-10-15",desc:"Restrizioni export chip AI verso Cina"},
+  {sector:"Technology",title:"CHIPS Act estensioni",date:"2024-08-01",desc:"Sussidi fab semiconduttori USA"},
+  {sector:"Technology",title:"TikTok Ban",date:"2024-04-23",desc:"Obbligo cessione TikTok da ByteDance"},
+  {sector:"Defense",title:"NDAA 2025",date:"2024-12-01",desc:"Autorizzazione spesa difesa $895B"},
+  {sector:"Defense",title:"Ukraine Aid $61B",date:"2024-04-20",desc:"Pacchetto aiuti militari"},
+  {sector:"Healthcare",title:"Drug Price Negotiation",date:"2024-09-01",desc:"CMS negozia prezzi farmaci Medicare"},
+  {sector:"Finance",title:"Basel III Rules",date:"2024-07-01",desc:"Nuovi requisiti capitale banche"},
+  {sector:"Finance",title:"Crypto FIT21",date:"2024-05-22",desc:"Framework regolatorio crypto"},
+  {sector:"Energy",title:"LNG Export Pause",date:"2024-05-01",desc:"Pausa autorizzazioni export LNG"},
+  {sector:"Technology",title:"Nvidia Export Controls",date:"2025-01-13",desc:"Nuove restrizioni chip AI"},
+  {sector:"Defense",title:"NDAA 2026",date:"2025-11-01",desc:"Proposta budget difesa 2026"},
+  {sector:"Healthcare",title:"GLP-1 Medicare",date:"2025-03-01",desc:"Copertura Medicare farmaci obesità"},
 ];
-
-// Calcola giorni tra due date
-function daysBetween(dateStr1, dateStr2) {
-  var d1 = new Date(dateStr1);
-  var d2 = new Date(dateStr2);
-  return Math.abs((d1 - d2) / (1000 * 60 * 60 * 24));
-}
-
-// ── FATTORE 1: Correlazione settore/commissione (0-40 punti) ──────────────────
-function scoreCommitteeCorrelation(role, sector, tier) {
-  if (!role || !sector) return { score: 0, reason: null };
-
-  // Leadership totale → accesso universale, punteggio base per qualsiasi settore
-  if (tier === 1) return { score: 30, reason: "Leadership con accesso a tutta la legislazione" };
-  if (tier === 2) return { score: 20, reason: "Whip con visione completa dei voti imminenti" };
-
-  var sectors = COMMITTEE_SECTORS[role] || [];
-  if (sectors.length === 0) return { score: 0, reason: null };
-
-  if (sectors.indexOf(sector) !== -1) {
-    return { score: 40, reason: "Settore coincide con commissione di appartenenza (" + role + ")" };
-  }
-  return { score: 0, reason: null };
-}
-
-// ── FATTORE 2: Timing rispetto a legislazione (0-35 punti) ───────────────────
-function scoreLegislationTiming(sector, tradeDate) {
-  if (!sector || !tradeDate) return { score: 0, reason: null };
-
-  var relevant = RECENT_LEGISLATION.filter(function(l) { return l.sector === sector; });
-  var bestScore = 0;
-  var bestReason = null;
-
-  relevant.forEach(function(law) {
-    var days = daysBetween(tradeDate, law.date);
-    var score = 0;
-    if (days <= 14)  score = 35;
-    else if (days <= 30)  score = 28;
-    else if (days <= 60)  score = 18;
-    else if (days <= 90)  score = 8;
-
-    if (score > bestScore) {
-      bestScore = score;
-      var direction = new Date(tradeDate) < new Date(law.date) ? "prima" : "dopo";
-      bestReason = Math.round(days) + " giorni " + direction + ": \"" + law.title + "\" — " + law.desc;
-    }
+function calcAnomalyScore(trade, allTrades){
+  var f1=0,f1r=null,f2=0,f2r=null,f3=0,f3r=null,lev=0,levr=null;
+  // F1: committee correlation
+  var role=trade.role; var sector=trade.sector; var tier=trade.tier;
+  if(tier===1){f1=30;f1r="Leadership con accesso a tutta la legislazione";}
+  else if(tier===2){f1=20;f1r="Whip con visione completa dei voti imminenti";}
+  else if(role&&COMMITTEE_SECTORS[role]&&COMMITTEE_SECTORS[role].indexOf(sector)!==-1){f1=40;f1r="Settore coincide con commissione ("+role+")";}
+  // F2: timing
+  var best=0,bestr=null;
+  RECENT_LEGISLATION.forEach(function(law){
+    if(law.sector!==sector) return;
+    var days=daysBetween(trade.transaction_date,law.date);
+    var sc=days<=14?35:days<=30?28:days<=60?18:days<=90?8:0;
+    if(sc>best){best=sc;var dir=new Date(trade.transaction_date)<new Date(law.date)?"prima":"dopo";bestr=Math.round(days)+" gg "+dir+": \""+law.title+"\" — "+law.desc;}
   });
-
-  return { score: bestScore, reason: bestReason };
-}
-
-// ── FATTORE 3: Volume anomalo rispetto allo storico del membro (0-25 punti) ──
-function scoreVolumeAnomaly(amountNum, memberTrades) {
-  if (!amountNum || !memberTrades || memberTrades.length < 3) {
-    // Punteggio base per importo assoluto se non abbiamo storico
-    if (amountNum >= 1000000) return { score: 25, reason: "Importo superiore a $1M (assoluto)" };
-    if (amountNum >= 500000)  return { score: 18, reason: "Importo superiore a $500K (assoluto)" };
-    if (amountNum >= 250000)  return { score: 10, reason: "Importo superiore a $250K (assoluto)" };
-    if (amountNum >= 100000)  return { score: 5,  reason: "Importo superiore a $100K (assoluto)" };
-    return { score: 0, reason: null };
-  }
-
-  var amounts = memberTrades.map(function(t) { return t.amountNum || 0; }).sort(function(a,b) { return b-a; });
-  var p75 = amounts[Math.floor(amounts.length * 0.25)];
-  var p90 = amounts[Math.floor(amounts.length * 0.10)];
-  var avg  = amounts.reduce(function(s,v) { return s+v; }, 0) / amounts.length;
-
-  if (amountNum >= p90 && p90 > 0) return { score: 25, reason: "Top 10% delle operazioni storiche del membro (media: " + formatAmount(avg) + ")" };
-  if (amountNum >= p75 && p75 > 0) return { score: 15, reason: "Top 25% delle operazioni storiche del membro (media: " + formatAmount(avg) + ")" };
-  if (amountNum >= avg && avg > 0)  return { score: 8,  reason: "Superiore alla media storica del membro (" + formatAmount(avg) + ")" };
-  return { score: 3, reason: "Nella norma rispetto allo storico del membro" };
-}
-
-// ── SCORE FINALE ──────────────────────────────────────────────────────────────
-function calcAnomalyScore(trade, allTrades) {
-  var memberTrades = allTrades.filter(function(t) {
-    return t.representative === trade.representative && t.id !== trade.id;
-  });
-
-  var f1 = scoreCommitteeCorrelation(trade.role, trade.sector, trade.tier);
-  var f2 = scoreLegislationTiming(trade.sector, trade.transaction_date);
-  var f3 = scoreVolumeAnomaly(trade.amountNum, memberTrades);
-
-  // Bonus: opzioni = leva → +10 se call/put
-  var leverageBonus = 0;
-  var leverageReason = null;
-  if (trade.instrument && (trade.instrument.label === "CALL" || trade.instrument.label === "PUT")) {
-    leverageBonus = 10;
-    leverageReason = "Uso di opzioni (" + trade.instrument.label + ") amplifica l'anomalia";
-  }
-
-  var total = Math.min(100, f1.score + f2.score + f3.score + leverageBonus);
-
-  var reasons = [];
-  if (f1.reason) reasons.push("📊 Commissione: " + f1.reason);
-  if (f2.reason) reasons.push("⏱ Timing: " + f2.reason);
-  if (f3.reason) reasons.push("💰 Volume: " + f3.reason);
-  if (leverageReason) reasons.push("⚡ Leva: " + leverageReason);
-
-  var level, color, bg, border;
-  if (total >= 66) {
-    level = "ALTO"; color = "#FF4455"; bg = "#2A0A0A"; border = "#6A1A1A";
-  } else if (total >= 36) {
-    level = "MEDIO"; color = "#FFB347"; bg = "#2A1800"; border = "#6A4000";
+  f2=best;f2r=bestr;
+  // F3: volume
+  var mt=allTrades.filter(function(t){return t.representative===trade.representative&&t.id!==trade.id;});
+  var amt=trade.amountNum;
+  if(mt.length<3){
+    if(amt>=1000000){f3=25;f3r="Importo >$1M (assoluto)";}
+    else if(amt>=500000){f3=18;f3r="Importo >$500K (assoluto)";}
+    else if(amt>=250000){f3=10;f3r="Importo >$250K (assoluto)";}
+    else if(amt>=100000){f3=5;f3r="Importo >$100K (assoluto)";}
   } else {
-    level = "BASSO"; color = "#00D4AA"; bg = "#002A1A"; border = "#006A40";
+    var amts=mt.map(function(t){return t.amountNum||0;}).sort(function(a,b){return b-a;});
+    var avg=amts.reduce(function(s,v){return s+v;},0)/amts.length;
+    var p90=amts[Math.floor(amts.length*0.10)];
+    var p75=amts[Math.floor(amts.length*0.25)];
+    if(amt>=p90&&p90>0){f3=25;f3r="Top 10% dello storico (media: "+fmtAmt(avg)+")";}
+    else if(amt>=p75&&p75>0){f3=15;f3r="Top 25% dello storico (media: "+fmtAmt(avg)+")";}
+    else if(amt>=avg&&avg>0){f3=8;f3r="Superiore alla media ("+fmtAmt(avg)+")";}
+    else{f3=3;f3r="Nella norma dello storico";}
+  }
+  // Leverage
+  var tp=(trade.type||"").toLowerCase();
+  if(tp.indexOf("call")!==-1||tp.indexOf("put")!==-1){lev=10;levr="Uso opzioni amplifica anomalia";}
+  var total=Math.min(100,f1+f2+f3+lev);
+  var reasons=[];
+  if(f1r) reasons.push("Commissione: "+f1r);
+  if(f2r) reasons.push("Timing: "+f2r);
+  if(f3r) reasons.push("Volume: "+f3r);
+  if(levr) reasons.push("Leva: "+levr);
+  var level,color,bg,border;
+  if(total>=66){level="ALTO";color="#FF4455";bg="#2A0A0A";border="#6A1A1A";}
+  else if(total>=36){level="MEDIO";color="#FFB347";bg="#2A1800";border="#6A4000";}
+  else{level="BASSO";color="#00D4AA";bg="#002A1A";border="#006A40";}
+  return {score:total,level:level,color:color,bg:bg,border:border,reasons:reasons,
+    breakdown:{committee:f1,timing:f2,volume:f3,leverage:lev}};
+}
+
+// ── Instrument parser ─────────────────────────────────────────────────────────
+function parseInstrument(type){
+  var s=(type||"").toLowerCase();
+  if(s.indexOf("call")!==-1) return{label:"CALL",color:"#00D4AA",desc:"Opzione Call — leva al rialzo"};
+  if(s.indexOf("put")!==-1)  return{label:"PUT",color:"#FF4455",desc:"Opzione Put — leva al ribasso"};
+  if(s.indexOf("option")!==-1) return{label:"OPTION",color:"#FFB347",desc:"Opzione — strumento con leva"};
+  if(s.indexOf("etf")!==-1||s.indexOf("fund")!==-1) return{label:"ETF",color:"#00C8FF",desc:"ETF — nessuna leva"};
+  if(s.indexOf("bond")!==-1||s.indexOf("treasury")!==-1) return{label:"BOND",color:"#8AA0C0",desc:"Obbligazione"};
+  return{label:"STOCK",color:"#C8D8F0",desc:"Azione ordinaria"};
+}
+
+// ── Mock data ─────────────────────────────────────────────────────────────────
+var MOCK_MEMBERS=["Nancy Pelosi","Kevin McCarthy","Mitch McConnell","Chuck Schumer","Dan Crenshaw","Jim Jordan","Adam Schiff","Ro Khanna","Tommy Tuberville","Richard Burr","Mike Johnson","Steve Scalise","Hakeem Jeffries","David Rouzer","Warren Davidson"];
+var MOCK_TICKERS=["AAPL","NVDA","MSFT","TSLA","GOOGL","META","AMZN","LMT","PFE","JPM","XOM","BA","AMD","INTC","CVX"];
+var MOCK_TYPES=["Purchase","Sale (Full)","Sale (Partial)"];
+var MOCK_AMOUNTS=["$100,001 - $250,000","$250,001 - $500,000","$500,001 - $1,000,000","$1,000,001 - $5,000,000"];
+function genMock(n){
+  n=n||40;
+  return Array.from({length:n},function(_,i){
+    var ticker=MOCK_TICKERS[Math.floor(Math.random()*MOCK_TICKERS.length)];
+    var amount=MOCK_AMOUNTS[Math.floor(Math.random()*MOCK_AMOUNTS.length)];
+    var rep=MOCK_MEMBERS[Math.floor(Math.random()*MOCK_MEMBERS.length)];
+    var d=new Date(); d.setDate(d.getDate()-Math.floor(Math.random()*30));
+    var info=getMemberInfo(rep,STATIC_ROLES);
+    return{id:"mock-"+i+"-"+Date.now(),representative:rep,ticker:ticker,
+      transaction_date:d.toISOString().split("T")[0],
+      type:MOCK_TYPES[Math.floor(Math.random()*MOCK_TYPES.length)],
+      amount:amount,amountNum:parseAmount(amount),sector:getSector(ticker),
+      isNew:i<3,role:info.role,tier:info.tier,
+      instrument:parseInstrument(MOCK_TYPES[Math.floor(Math.random()*MOCK_TYPES.length)]),
+      anomaly:null};
+  }).sort(function(a,b){return new Date(b.transaction_date)-new Date(a.transaction_date);});
+}
+function enrichAll(list){
+  return list.map(function(t){return Object.assign({},t,{anomaly:calcAnomalyScore(t,list)});});
+}
+
+// ── localStorage helpers ──────────────────────────────────────────────────────
+function loadKeys(){
+  try{return{congress:localStorage.getItem("ct_congress_key")||"",quiver:localStorage.getItem("ct_quiver_key")||""};}
+  catch(e){return{congress:"",quiver:""};}
+}
+function saveKeys(k){try{localStorage.setItem("ct_congress_key",k.congress);localStorage.setItem("ct_quiver_key",k.quiver);}catch(e){}}
+function loadPortfolio(){try{return JSON.parse(localStorage.getItem("ct_portfolio")||"[]");}catch(e){return[];}}
+function savePortfolio(p){try{localStorage.setItem("ct_portfolio",JSON.stringify(p));}catch(e){}}
+function loadCash(){try{return parseFloat(localStorage.getItem("ct_cash")||"10000");}catch(e){return 10000;}}
+function saveCash(c){try{localStorage.setItem("ct_cash",String(c));}catch(e){}}
+
+// ── Main App ──────────────────────────────────────────────────────────────────
+function App(){
+  var ps = useState("tracker"); var page=ps[0]; var setPage=ps[1];
+  var ts = useState([]); var trades=ts[0]; var setTrades=ts[1];
+  var fs = useState([]); var filtered=fs[0]; var setFiltered=fs[1];
+  var ls = useState(true); var loading=ls[0]; var setLoading=ls[1];
+  var lps= useState("idle"); var loadPhase=lps[0]; var setLoadPhase=lps[1];
+  var aus= useState(null); var lastUpdate=aus[0]; var setLastUpdate=aus[1];
+  var fls= useState({member:"",sector:"All",minAmount:0,minRisk:"All"}); var filters=fls[0]; var setFilters=fls[1];
+  var tts= useState(""); var tickerText=tts[0]; var setTickerText=tts[1];
+  var als= useState([]); var alerts=als[0]; var setAlerts=als[1];
+  var prevIds=useRef(new Set());
+  // Keys
+  var ks=useState(loadKeys); var keys=ks[0]; var setKeys=ks[1];
+  var kds=useState(loadKeys); var keyDraft=kds[0]; var setKeyDraft=kds[1];
+  var sss=useState(false); var showSetup=sss[0]; var setShowSetup=sss[1];
+  var aps=useState({congress:"idle",quiver:"idle"}); var apiStatus=aps[0]; var setApiStatus=aps[1];
+  var rrs=useState(STATIC_ROLES); var roleRegistry=rrs[0]; var setRoleRegistry=rrs[1];
+  // Detail modal
+  var sTs=useState(null); var selectedTrade=sTs[0]; var setSelectedTrade=sTs[1];
+  var tDs=useState(null); var tickerDetail=tDs[0]; var setTickerDetail=tDs[1];
+  var dLs=useState(false); var detailLoading=dLs[0]; var setDetailLoading=dLs[1];
+  // Portfolio
+  var pfs=useState(loadPortfolio); var portfolio=pfs[0]; var setPortfolio=pfs[1];
+  var chs=useState(loadCash); var cash=chs[0]; var setCash=chs[1];
+  var atms=useState(null); var addTradeModal=atms[0]; var setAddTradeModal=atms[1];
+  var ias=useState(""); var investAmt=ias[0]; var setInvestAmt=ias[1];
+  var eps=useState(""); var entryPriceStr=eps[0]; var setEntryPriceStr=eps[1];
+  var lps2=useState({}); var livePrices=lps2[0]; var setLivePrices=lps2[1];
+  var ecs=useState(false); var editingCash=ecs[0]; var setEditingCash=ecs[1];
+  var cis=useState(""); var cashInput=cis[0]; var setCashInput=cis[1];
+
+  function getInfo(name){ return getMemberInfo(name,roleRegistry); }
+
+  function parseTrade(t,i){
+    var ticker=(t.ticker||"").replace(/[^A-Z]/g,"")||"N/A";
+    var rep=t.representative||t.Senator||"Unknown";
+    var info=getInfo(rep);
+    var amtNum=parseAmount(t.amount);
+    return{id:rep+"-"+t.transaction_date+"-"+ticker+"-"+i,representative:rep,ticker:ticker,
+      transaction_date:t.transaction_date,type:t.type||"Unknown",
+      amount:t.amount||"Unknown",amountNum:amtNum,sector:getSector(ticker),
+      isNew:false,role:info.role,tier:info.tier,
+      instrument:parseInstrument(t.type),anomaly:null};
   }
 
-  return { score: total, level: level, color: color, bg: bg, border: border, reasons: reasons,
-    breakdown: { committee: f1.score, timing: f2.score, volume: f3.score, leverage: leverageBonus } };
-}
-
-
-const STATIC_ROLES = {
-  "Nancy Pelosi":    { role: "Fmr. Speaker",       tier: 1 },
-  "Kevin McCarthy":  { role: "Fmr. Speaker",       tier: 1 },
-  "Mike Johnson":    { role: "Speaker",             tier: 1 },
-  "Mitch McConnell": { role: "Fmr. Maj. Leader",   tier: 1 },
-  "Chuck Schumer":   { role: "Min. Leader",         tier: 1 },
-  "John Thune":      { role: "Maj. Leader",         tier: 1 },
-  "Steve Scalise":   { role: "Maj. Leader",         tier: 1 },
-  "Hakeem Jeffries": { role: "Min. Leader",         tier: 1 },
-  "Tom Emmer":       { role: "Maj. Whip",           tier: 2 },
-  "Katherine Clark": { role: "Min. Whip",           tier: 2 },
-  "John Barrasso":   { role: "Maj. Whip",           tier: 2 },
-  "Dick Durbin":     { role: "Min. Whip",           tier: 2 },
-  "Jim Jordan":      { role: "Judiciary Chair",     tier: 3 },
-  "Jason Smith":     { role: "Ways & Means Chair",  tier: 3 },
-  "Mike Turner":     { role: "Intel. Chair",        tier: 3 },
-  "Tommy Tuberville":{ role: "Armed Svcs.",         tier: 3 },
-  "Richard Burr":    { role: "Fmr. Intel. Chair",  tier: 3 },
-  "Adam Schiff":     { role: "Fmr. Intel. Chair",  tier: 3 },
-  "Ro Khanna":       { role: "Oversight",           tier: 3 },
-  "Dan Crenshaw":    { role: "Top Trader",          tier: 4 },
-  "David Rouzer":    { role: "Top Trader",          tier: 4 },
-  "Warren Davidson": { role: "Top Trader",          tier: 4 },
-  "Ron Wyden":       { role: "Top Trader",          tier: 4 },
-};
-
-const LEADERSHIP_TIER_MAP = {
-  "speaker": 1, "majority leader": 1, "minority leader": 1,
-  "president pro tempore": 1,
-  "majority whip": 2, "minority whip": 2,
-  "chair": 3, "chairman": 3, "chairwoman": 3, "ranking member": 3,
-};
-
-function getTierFromTitle(title) {
-  if (!title) return 0;
-  const t = title.toLowerCase();
-  for (const [kw, tier] of Object.entries(LEADERSHIP_TIER_MAP)) {
-    if (t.includes(kw)) return tier;
-  }
-  return 0;
-}
-
-const TIER_STYLE = {
-  1: { color: "#FFD700", bg: "#2A1F00", border: "#6A5000", label: "LEADERSHIP" },
-  2: { color: "#FF8C42", bg: "#2A1200", border: "#6A3000", label: "WHIP"       },
-  3: { color: "#00C8FF", bg: "#00182A", border: "#004A6A", label: "COMMITTEE"  },
-  4: { color: "#C084FC", bg: "#1A0A2A", border: "#4A1A6A", label: "TOP TRADER" },
-};
-
-// Funzione globale — usa solo ruoli statici (per mock fuori dal componente)
-function getMemberInfoStatic(name) {
-  for (const [key, val] of Object.entries(STATIC_ROLES)) {
-    if (name && name.toLowerCase().includes(key.toLowerCase())) return val;
-  }
-  return { role: null, tier: 0 };
-}
-
-// ── localStorage per API key ─────────────────────────────────────────────────
-function loadKeys() {
-  try {
-    return {
-      congress: localStorage.getItem("ct_congress_key") || "",
-      quiver:   localStorage.getItem("ct_quiver_key")   || "",
-    };
-  } catch { return { congress: "", quiver: "" }; }
-}
-function saveKeys(keys) {
-  try {
-    localStorage.setItem("ct_congress_key", keys.congress);
-    localStorage.setItem("ct_quiver_key",   keys.quiver);
-  } catch {}
-}
-
-// ── Mock data ────────────────────────────────────────────────────────────────
-const MOCK_MEMBERS = [
-  "Nancy Pelosi","Kevin McCarthy","Mitch McConnell","Chuck Schumer",
-  "Alexandria Ocasio-Cortez","Ted Cruz","Marco Rubio","Elizabeth Warren",
-  "Bernie Sanders","Rand Paul","Dan Crenshaw","Matt Gaetz","Jim Jordan",
-  "Adam Schiff","Ro Khanna","Tommy Tuberville","Richard Burr",
-  "Mike Johnson","Steve Scalise","Hakeem Jeffries","David Rouzer","Warren Davidson",
-];
-const MOCK_TICKERS = ["AAPL","NVDA","MSFT","TSLA","GOOGL","META","AMZN","LMT","PFE","JPM","XOM","BA","AMD","INTC","CVX"];
-const MOCK_TYPES   = ["Purchase","Sale (Full)","Sale (Partial)","Exchange"];
-const MOCK_AMOUNTS = ["$1,001 - $15,000","$15,001 - $50,000","$100,001 - $250,000","$250,001 - $500,000","$500,001 - $1,000,000"];
-
-function generateMockTrades(n) {
-  n = n || 40;
-  return Array.from({ length: n }, function(_, i) {
-    var ticker = MOCK_TICKERS[Math.floor(Math.random() * MOCK_TICKERS.length)];
-    var amount = MOCK_AMOUNTS[Math.floor(Math.random() * MOCK_AMOUNTS.length)];
-    var rep    = MOCK_MEMBERS[Math.floor(Math.random() * MOCK_MEMBERS.length)];
-    var date   = new Date();
-    date.setDate(date.getDate() - Math.floor(Math.random() * 30));
-    var info = getMemberInfoStatic(rep);
-    var amtNum = parseAmount(amount);
-    var nw = getNetWorth(rep);
-    var instr = parseInstrument(MOCK_TYPES[Math.floor(Math.random() * MOCK_TYPES.length)], "");
-    return {
-      id: "mock-" + i + "-" + Date.now(),
-      representative: rep,
-      ticker: ticker,
-      transaction_date: date.toISOString().split("T")[0],
-      type: MOCK_TYPES[Math.floor(Math.random() * MOCK_TYPES.length)],
-      amount: amount,
-      amountNum: amtNum,
-      sector: getSector(ticker),
-      isNew: i < 3,
-      role: info.role,
-      tier: info.tier,
-      netWorth: nw,
-      wealthPct: calcWealthPct(amtNum, nw),
-      instrument: instr,
-    };
-  }).sort(function(a, b) {
-    return new Date(b.transaction_date) - new Date(a.transaction_date);
-  });
-}
-
-// ── Componente principale ────────────────────────────────────────────────────
-function App() {
-  var {useState, useEffect, useRef, useCallback} = React;
-
-  var [trades,     setTrades]     = useState([]);
-  var [filtered,   setFiltered]   = useState([]);
-  var [alerts,     setAlerts]     = useState([]);
-  var [loading,    setLoading]    = useState(true);
-  var [lastUpdate, setLastUpdate] = useState(null);
-  var [loadPhase,  setLoadPhase]  = useState("idle");
-  var [filters,    setFilters]    = useState({ member: "", sector: "All", minAmount: 0, type: "All", minRisk: "All" });
-  var [tickerText, setTickerText] = useState("");
-  var prevIds = useRef(new Set());
-
-  var [keys,      setKeys]      = useState(loadKeys);
-  var [keyDraft,  setKeyDraft]  = useState(loadKeys);
-  var [showSetup, setShowSetup] = useState(false);
-  var [apiStatus, setApiStatus] = useState({ congress: "idle", quiver: "idle" });
-  var [roleRegistry,    setRoleRegistry]    = useState(STATIC_ROLES);
-  var [selectedTrade,   setSelectedTrade]   = useState(null);
-  var [tickerDetail,    setTickerDetail]    = useState(null);
-  var [detailLoading,   setDetailLoading]   = useState(false);
-
-  var fetchTickerDetail = useCallback(async function(ticker) {
-    if (!ticker || ticker === "N/A") return;
-    setDetailLoading(true);
-    setTickerDetail(null);
-
-    // Database locale — tutti i ticker più tradati dai membri del Congresso
-    var DB = {
-      "AAPL":  { longName:"Apple Inc.",                     isin:"US0378331005", cusip:"037833100", exchange:"NASDAQ", type:"Common Stock", sector:"Technology",    description:"Produce iPhone, Mac, iPad e servizi digitali. È la più grande azienda al mondo per capitalizzazione." },
-      "MSFT":  { longName:"Microsoft Corporation",          isin:"US5949181045", cusip:"594918104", exchange:"NASDAQ", type:"Common Stock", sector:"Technology",    description:"Software, cloud Azure, LinkedIn e Xbox. Uno dei principali fornitori di AI enterprise." },
-      "NVDA":  { longName:"NVIDIA Corporation",             isin:"US67066G1040", cusip:"67066G104", exchange:"NASDAQ", type:"Common Stock", sector:"Technology",    description:"Leader nei chip GPU per AI, gaming e data center. Protagonista della rivoluzione AI." },
-      "GOOGL": { longName:"Alphabet Inc. Class A",          isin:"US02079K3059", cusip:"02079K305", exchange:"NASDAQ", type:"Common Stock", sector:"Technology",    description:"Holding di Google: motore di ricerca, YouTube, Android e cloud GCP." },
-      "GOOG":  { longName:"Alphabet Inc. Class C",          isin:"US02079K1079", cusip:"02079K107", exchange:"NASDAQ", type:"Common Stock", sector:"Technology",    description:"Azioni di classe C di Alphabet (Google), senza diritto di voto." },
-      "META":  { longName:"Meta Platforms Inc.",            isin:"US30303M1027", cusip:"30303M102", exchange:"NASDAQ", type:"Common Stock", sector:"Technology",    description:"Facebook, Instagram e WhatsApp. Investe massicciamente nel metaverso e nell'AI." },
-      "AMZN":  { longName:"Amazon.com Inc.",                isin:"US0231351067", cusip:"023135106", exchange:"NASDAQ", type:"Common Stock", sector:"Technology",    description:"E-commerce, AWS cloud e Prime Video. AWS è il leader mondiale nel cloud computing." },
-      "TSLA":  { longName:"Tesla Inc.",                     isin:"US88160R1014", cusip:"88160R101", exchange:"NASDAQ", type:"Common Stock", sector:"Technology",    description:"Auto elettriche, energia solare e batterie. Il brand più controverso tra le congressional trades." },
-      "AMD":   { longName:"Advanced Micro Devices Inc.",    isin:"US0079031078", cusip:"007903107", exchange:"NASDAQ", type:"Common Stock", sector:"Technology",    description:"Chip CPU e GPU concorrente di Intel e NVIDIA, con forte crescita nel segmento AI." },
-      "INTC":  { longName:"Intel Corporation",              isin:"US4581401001", cusip:"458140100", exchange:"NASDAQ", type:"Common Stock", sector:"Technology",    description:"Il più grande produttore di CPU x86. In ristrutturazione con focus su chip made in USA." },
-      "CRM":   { longName:"Salesforce Inc.",                isin:"US79466L3024", cusip:"79466L302", exchange:"NYSE",   type:"Common Stock", sector:"Technology",    description:"CRM cloud leader mondiale. Usato da migliaia di aziende per gestire clienti e vendite." },
-      "ORCL":  { longName:"Oracle Corporation",             isin:"US68389X1054", cusip:"68389X105", exchange:"NYSE",   type:"Common Stock", sector:"Technology",    description:"Database, ERP cloud e infrastruttura. Ha investito miliardi in AI e data center." },
-      "IBM":   { longName:"International Business Machines",isin:"US4592001014", cusip:"459200101", exchange:"NYSE",   type:"Common Stock", sector:"Technology",    description:"Storico colosso tech trasformato in cloud ibrido e AI con Watson." },
-      "QCOM":  { longName:"Qualcomm Incorporated",          isin:"US7475251036", cusip:"747525103", exchange:"NASDAQ", type:"Common Stock", sector:"Technology",    description:"Chip Snapdragon per smartphone e connettività 5G. Molto sensibile alle restrizioni export." },
-      "AVGO":  { longName:"Broadcom Inc.",                  isin:"US11135F1012", cusip:"11135F101", exchange:"NASDAQ", type:"Common Stock", sector:"Technology",    description:"Semiconduttori e software infrastrutturale. Ha acquisito VMware nel 2023." },
-      "MU":    { longName:"Micron Technology Inc.",         isin:"US5951121038", cusip:"595112103", exchange:"NASDAQ", type:"Common Stock", sector:"Technology",    description:"Produttore di RAM e NAND flash. Beneficiario del CHIPS Act per fab USA." },
-      "JPM":   { longName:"JPMorgan Chase & Co.",           isin:"US46625H1005", cusip:"46625H100", exchange:"NYSE",   type:"Common Stock", sector:"Finance",       description:"La più grande banca USA per asset. Operativa in investment banking, retail e asset management." },
-      "BAC":   { longName:"Bank of America Corporation",    isin:"US0605051046", cusip:"060505104", exchange:"NYSE",   type:"Common Stock", sector:"Finance",       description:"Seconda banca USA. Forte nel retail banking, carte di credito e wealth management." },
-      "GS":    { longName:"The Goldman Sachs Group Inc.",   isin:"US38141G1040", cusip:"38141G104", exchange:"NYSE",   type:"Common Stock", sector:"Finance",       description:"Investment bank di élite. Trading, M&A advisory e gestione patrimoniale." },
-      "MS":    { longName:"Morgan Stanley",                 isin:"US6174464486", cusip:"617446448", exchange:"NYSE",   type:"Common Stock", sector:"Finance",       description:"Investment bank e wealth management. Molto esposta ai mercati dei capitali globali." },
-      "WFC":   { longName:"Wells Fargo & Company",          isin:"US9497461015", cusip:"949746101", exchange:"NYSE",   type:"Common Stock", sector:"Finance",       description:"Quarta banca USA. Principalmente retail e mortgage lending." },
-      "V":     { longName:"Visa Inc.",                      isin:"US92826C8394", cusip:"92826C839", exchange:"NYSE",   type:"Common Stock", sector:"Finance",       description:"La rete di pagamenti più grande al mondo. Non eroga credito, gestisce solo transazioni." },
-      "MA":    { longName:"Mastercard Incorporated",        isin:"US57636Q1040", cusip:"57636Q104", exchange:"NYSE",   type:"Common Stock", sector:"Finance",       description:"Seconda rete di pagamenti globale. Competitor diretto di Visa." },
-      "JNJ":   { longName:"Johnson & Johnson",              isin:"US4781601046", cusip:"478160104", exchange:"NYSE",   type:"Common Stock", sector:"Healthcare",    description:"Farmaceutica e medtech. Ha scisso il segmento consumer (Kenvue) nel 2023." },
-      "PFE":   { longName:"Pfizer Inc.",                    isin:"US7170811035", cusip:"717081103", exchange:"NYSE",   type:"Common Stock", sector:"Healthcare",    description:"Grande farmaceutica, nota per il vaccino COVID mRNA sviluppato con BioNTech." },
-      "UNH":   { longName:"UnitedHealth Group Inc.",        isin:"US91324P1021", cusip:"91324P102", exchange:"NYSE",   type:"Common Stock", sector:"Healthcare",    description:"Il più grande gruppo assicurativo sanitario USA con Optum come divisione tech." },
-      "ABBV":  { longName:"AbbVie Inc.",                    isin:"US00287Y1091", cusip:"00287Y109", exchange:"NYSE",   type:"Common Stock", sector:"Healthcare",    description:"Farmaceutica con Humira, il farmaco più venduto al mondo per anni." },
-      "MRK":   { longName:"Merck & Co. Inc.",               isin:"US58933Y1055", cusip:"58933Y105", exchange:"NYSE",   type:"Common Stock", sector:"Healthcare",    description:"Farmaceutica con Keytruda, oncologico best-seller globale." },
-      "LLY":   { longName:"Eli Lilly and Company",          isin:"US5324571083", cusip:"532457108", exchange:"NYSE",   type:"Common Stock", sector:"Healthcare",    description:"Farmaceutica con Mounjaro e Ozempic competitor. Leader nel diabete e obesità." },
-      "AMGN":  { longName:"Amgen Inc.",                     isin:"US0311621009", cusip:"031162100", exchange:"NASDAQ", type:"Common Stock", sector:"Healthcare",    description:"Biotecnologica con farmaci oncologici e per malattie rare." },
-      "XOM":   { longName:"Exxon Mobil Corporation",        isin:"US30231G1022", cusip:"30231G102", exchange:"NYSE",   type:"Common Stock", sector:"Energy",        description:"La più grande oil major USA. Opera in upstream, raffinazione e petrolchimico." },
-      "CVX":   { longName:"Chevron Corporation",            isin:"US1667641005", cusip:"166764100", exchange:"NYSE",   type:"Common Stock", sector:"Energy",        description:"Seconda oil major USA. Forte in LNG, con investimenti in energie rinnovabili." },
-      "COP":   { longName:"ConocoPhillips",                 isin:"US20825C1045", cusip:"20825C104", exchange:"NYSE",   type:"Common Stock", sector:"Energy",        description:"Indipendente petrolifera focalizzata sull'upstream. Molto efficiente nei costi." },
-      "LMT":   { longName:"Lockheed Martin Corporation",    isin:"US5398301094", cusip:"539830109", exchange:"NYSE",   type:"Common Stock", sector:"Defense",       description:"Maggiore contractor difesa USA. Produce F-35, missili e sistemi spaziali." },
-      "RTX":   { longName:"RTX Corporation",                isin:"US75513E1010", cusip:"75513E101", exchange:"NYSE",   type:"Common Stock", sector:"Defense",       description:"Raytheon + United Technologies. Missili Patriot, motori jet e avionica." },
-      "NOC":   { longName:"Northrop Grumman Corporation",   isin:"US6668071029", cusip:"666807102", exchange:"NYSE",   type:"Common Stock", sector:"Defense",       description:"Bomber B-21, sistemi spaziali e cyber. Forte nei contratti classified." },
-      "BA":    { longName:"The Boeing Company",             isin:"US0970231058", cusip:"097023105", exchange:"NYSE",   type:"Common Stock", sector:"Defense",       description:"Aeronautica civile e militare. In difficoltà dopo crisi 737 MAX e problemi qualità." },
-      "GD":    { longName:"General Dynamics Corporation",   isin:"US3695501086", cusip:"369550108", exchange:"NYSE",   type:"Common Stock", sector:"Defense",       description:"Navi da guerra, carri armati Abrams, jet Gulfstream e IT difesa." },
-      "SPY":   { longName:"SPDR S&P 500 ETF Trust",         isin:"US78462F1030", cusip:"78462F103", exchange:"NYSE",   type:"ETF",          sector:"Diversified",   description:"Il più grande ETF al mondo. Replica l'indice S&P 500 con 500 grandi aziende USA." },
-      "QQQ":   { longName:"Invesco QQQ Trust",              isin:"US46090E1038", cusip:"46090E103", exchange:"NASDAQ", type:"ETF",          sector:"Technology",    description:"ETF che replica il NASDAQ-100. Molto esposto a tech e growth." },
-      "IWM":   { longName:"iShares Russell 2000 ETF",       isin:"US4642876555", cusip:"464287655", exchange:"NYSE",   type:"ETF",          sector:"Diversified",   description:"ETF sulle small cap USA. Indicatore della salute dell'economia domestica." },
-      "VTI":   { longName:"Vanguard Total Stock Market ETF",isin:"US9229087690", cusip:"922908769", exchange:"NYSE",   type:"ETF",          sector:"Diversified",   description:"ETF Vanguard sull'intero mercato azionario USA, oltre 3.500 titoli." },
-      "GLD":   { longName:"SPDR Gold Shares",               isin:"US78463V1070", cusip:"78463V107", exchange:"NYSE",   type:"ETF",          sector:"Commodities",   description:"ETF sull'oro fisico. Usato come hedge contro inflazione e instabilità." },
-      "NFLX":  { longName:"Netflix Inc.",                   isin:"US64110L1061", cusip:"64110L106", exchange:"NASDAQ", type:"Common Stock", sector:"Technology",    description:"Piattaforma streaming leader globale con 260M+ abbonati e produzione originale." },
-      "DIS":   { longName:"The Walt Disney Company",        isin:"US2546871060", cusip:"254687106", exchange:"NYSE",   type:"Common Stock", sector:"Technology",    description:"Media, parchi a tema, Disney+ streaming e franchise Marvel/Star Wars." },
-      "PYPL":  { longName:"PayPal Holdings Inc.",           isin:"US70450Y1038", cusip:"70450Y103", exchange:"NASDAQ", type:"Common Stock", sector:"Finance",       description:"Pagamenti digitali, Venmo e Braintree. In fase di riposizionamento strategico." },
-      "UBER":  { longName:"Uber Technologies Inc.",         isin:"US90353T1007", cusip:"90353T100", exchange:"NYSE",   type:"Common Stock", sector:"Technology",    description:"Ride-sharing, food delivery Uber Eats e logistica. Prima azienda del gig economy." },
-      "COIN":  { longName:"Coinbase Global Inc.",           isin:"US19260Q1076", cusip:"19260Q107", exchange:"NASDAQ", type:"Common Stock", sector:"Finance",       description:"Principale exchange crypto USA. Molto sensibile alla regolamentazione del settore." },
-    };
-
-    var info = DB[ticker.toUpperCase()];
-    if (info) {
-      setTickerDetail({
-        longName:    info.longName,
-        symbol:      ticker,
-        exchange:    info.exchange,
-        currency:    "USD",
-        type:        info.type,
-        sector:      info.sector,
-        isin:        info.isin,
-        cusip:       info.cusip,
-        figi:        null,
-        marketSector:info.sector,
-        description: info.description,
-        currentPrice:null,
-        prevClose:   null,
-        fromDB:      true,
-      });
+  function fetchTickerDetail(ticker){
+    if(!ticker||ticker==="N/A") return;
+    setDetailLoading(true); setTickerDetail(null);
+    var info=ISIN_DB[ticker.toUpperCase()];
+    if(info){
+      setTickerDetail(Object.assign({symbol:ticker},info));
     } else {
-      // Ticker non in database — mostra info base con link a OpenFIGI
-      setTickerDetail({
-        longName:    ticker,
-        symbol:      ticker,
-        exchange:    "—", currency:"USD", type:"—", sector:"—",
-        isin:        null, cusip:null, figi:null,
-        description: "Ticker non nel database locale. Cerca l'ISIN manualmente tramite i link qui sotto.",
-        fromDB:      false,
-      });
+      setTickerDetail({longName:ticker,symbol:ticker,exchange:"—",currency:"USD",
+        type:"—",sector:"—",isin:null,cusip:null,
+        description:"Ticker non nel database. Cerca su openfigi.com"});
     }
     setDetailLoading(false);
-  }, []);
+  }
 
-  // getMemberInfo dinamico — usa il registry aggiornato dalle API
-  var getMemberInfo = useCallback(function(name) {
-    for (var key in roleRegistry) {
-      if (name && name.toLowerCase().includes(key.toLowerCase())) return roleRegistry[key];
+  var PRICE_PROXY = 'https://wispy-cherry-6d83.sgv2v6cgz8.workers.dev';
+
+  function fetchLivePrice(ticker){
+    if(!ticker||livePrices[ticker]) return;
+    fetch(PRICE_PROXY+'?ticker='+ticker)
+      .then(function(r){return r.ok?r.json():Promise.reject();})
+      .then(function(data){
+        if(data.ok&&data.price){
+          var u={};u[ticker]=data.price;
+          setLivePrices(function(p){return Object.assign({},p,u);});
+        }
+      }).catch(function(){});
+  }
+
+  // Refresh prezzi live per tutte le posizioni del portfolio
+
+  var prs=useState(null); var lastPriceUpdate=prs[0]; var setLastPriceUpdate=prs[1];
+  var pls=useState(false); var pricesLoading=pls[0]; var setPricesLoading=pls[1];
+
+  // Auto-refresh prezzi ogni 30s quando sei sul portfolio
+  useEffect(function(){
+    if(page!=="portfolio"||portfolio.length===0) return;
+    function doRefresh(){
+      setPricesLoading(true);
+      var done=0; var total=portfolio.length;
+      if(total===0){setPricesLoading(false);return;}
+      portfolio.forEach(function(pos){
+        fetch(PRICE_PROXY+'?ticker='+pos.ticker)
+          .then(function(r){return r.ok?r.json():Promise.reject();})
+          .then(function(data){
+            if(data.ok&&data.price){
+              var u={};u[pos.ticker]=data.price;
+              setLivePrices(function(p){return Object.assign({},p,u);});
+            }
+          }).catch(function(){})
+          .finally(function(){
+            done++;
+            if(done>=total){setPricesLoading(false);setLastPriceUpdate(new Date());}
+          });
+      });
     }
-    return { role: null, tier: 0 };
-  }, [roleRegistry]);
+    doRefresh();
+    var iv=setInterval(doRefresh,30000);
+    return function(){clearInterval(iv);};
+  },[page,portfolio.length]);
 
-  var parseTrade = useCallback(function(t, i) {
-    var ticker = (t.ticker || "").replace(/[^A-Z]/g, "") || "N/A";
-    var rep    = t.representative || t.Senator || "Unknown";
-    var info   = getMemberInfo(rep);
-    var amtNum = parseAmount(t.amount);
-    var nw     = getNetWorth(rep);
-    var instr  = parseInstrument(t.type, t.asset_description || t.description || "");
-    return {
-      id: rep + "-" + t.transaction_date + "-" + ticker + "-" + i,
-      representative: rep,
-      ticker: ticker,
-      transaction_date: t.transaction_date,
-      type: t.type || "Unknown",
-      amount: t.amount || "Unknown",
-      amountNum: amtNum,
-      sector: getSector(ticker),
-      isNew: false,
-      role: info.role,
-      tier: info.tier,
-      netWorth: nw,
-      wealthPct: calcWealthPct(amtNum, nw),
-      instrument: instr,
-      anomaly: null, // calcolato dopo con enrichTrades
-    };
-  }, [getMemberInfo]);
+  // Fetch trades
+  useEffect(function(){
+    setLoadPhase("fast");
+    fetch("https://house-stock-watcher-data.s3-us-west-2.amazonaws.com/data/fillings.json")
+      .then(function(r){return r.ok?r.json():null;})
+      .then(function(raw){
+        if(!raw) throw new Error("no data");
+        var recent=raw.slice(0,100).map(parseTrade);
+        var newOnes=recent.filter(function(t){return !prevIds.current.has(t.id);});
+        newOnes.forEach(function(t){prevIds.current.add(t.id);});
+        if(newOnes.length>0){
+          setTrades(function(prev){return enrichAll(newOnes.concat(prev)).sort(function(a,b){return new Date(b.transaction_date)-new Date(a.transaction_date);});});
+          setLastUpdate(new Date()); setLoading(false);
+        }
+      }).catch(function(){}).finally(function(){
+        setLoadPhase("full");
+        fetch("https://house-stock-watcher-data.s3-us-west-2.amazonaws.com/data/all_transactions.json")
+          .then(function(r){return r.ok?r.json():null;})
+          .then(function(raw){
+            if(!raw) throw new Error("no data");
+            var all=enrichAll(raw.map(parseTrade).sort(function(a,b){return new Date(b.transaction_date)-new Date(a.transaction_date);}));
+            all.forEach(function(t){prevIds.current.add(t.id);});
+            setTrades(all); setLastUpdate(new Date()); setLoading(false); setLoadPhase("done");
+          }).catch(function(){
+            setLoadPhase("error");
+            if(trades.length===0){
+              var mock=enrichAll(genMock(50));
+              mock.forEach(function(t){prevIds.current.add(t.id);});
+              setTrades(mock); setLoading(false); setLastUpdate(new Date());
+            }
+          });
+      });
+    // Live interval
+    var iv=setInterval(function(){
+      setTrades(function(prev){
+        if(prev.length>0&&Math.random()>0.4){
+          var ticker=MOCK_TICKERS[Math.floor(Math.random()*MOCK_TICKERS.length)];
+          var amount=MOCK_AMOUNTS[Math.floor(Math.random()*MOCK_AMOUNTS.length)];
+          var rep=MOCK_MEMBERS[Math.floor(Math.random()*MOCK_MEMBERS.length)];
+          var info=getInfo(rep);
+          var nt={id:"live-"+Date.now(),representative:rep,ticker:ticker,
+            type:MOCK_TYPES[Math.floor(Math.random()*MOCK_TYPES.length)],
+            transaction_date:new Date().toISOString().split("T")[0],
+            amount:amount,amountNum:parseAmount(amount),sector:getSector(ticker),
+            isNew:true,role:info.role,tier:info.tier,instrument:parseInstrument("Purchase"),anomaly:null};
+          nt.anomaly=calcAnomalyScore(nt,prev);
+          setAlerts(function(a){return [{id:nt.id,text:"LIVE: "+rep+" — "+ticker+" "+amount,time:new Date()}].concat(a).slice(0,5);});
+          setLastUpdate(new Date());
+          return [nt].concat(prev.slice(0,199));
+        }
+        return prev;
+      });
+    },8000);
+    return function(){clearInterval(iv);};
+  },[]);
 
-  // Arricchisce le trade con lo score anomalia usando lo storico completo
-  var enrichTrades = useCallback(function(tradeList) {
-    return tradeList.map(function(t) {
-      return Object.assign({}, t, { anomaly: calcAnomalyScore(t, tradeList) });
+  // Filters
+  useEffect(function(){
+    var r=trades.slice();
+    if(filters.member.trim()){var q=filters.member.toLowerCase();r=r.filter(function(t){return t.representative.toLowerCase().indexOf(q)!==-1||t.ticker.toLowerCase().indexOf(q)!==-1;});}
+    if(filters.sector!=="All") r=r.filter(function(t){return t.sector===filters.sector;});
+    if(filters.minAmount>0) r=r.filter(function(t){return t.amountNum>=filters.minAmount;});
+    if(filters.minRisk!=="All"){
+      var minSc=filters.minRisk==="ALTO"?66:36;
+      r=r.filter(function(t){return t.anomaly&&t.anomaly.score>=minSc;});
+    }
+    setFiltered(r);
+  },[trades,filters]);
+
+  // Ticker bar
+  useEffect(function(){
+    if(trades.length>0){
+      var txt=trades.slice(0,15).map(function(t){return t.ticker+" · "+t.representative.split(" ").pop()+" · "+(isSale(t.type)?"▼":"▲")+" "+t.amount;}).join("   ░░░   ");
+      setTickerText(txt);
+    }
+  },[trades]);
+
+  // Portfolio helpers
+  function addToPortfolio(trade,amount,price){
+    var shares=price>0?amount/price:0;
+    var pos={id:"pos-"+Date.now(),ticker:trade.ticker,member:trade.representative,
+      sector:trade.sector,date:new Date().toISOString().split("T")[0],
+      tradeDate:trade.transaction_date,invested:amount,entryPrice:price,shares:shares,
+      anomalyScore:trade.anomaly?trade.anomaly.score:0,
+      anomalyLevel:trade.anomaly?trade.anomaly.level:"—"};
+    setPortfolio(function(p){var u=[pos].concat(p);savePortfolio(u);return u;});
+    setCash(function(c){var nc=c-amount;saveCash(nc);return nc;});
+  }
+  function removePos(id){
+    setPortfolio(function(p){
+      var pos=p.find(function(x){return x.id===id;});
+      var u=p.filter(function(x){return x.id!==id;});
+      savePortfolio(u);
+      if(pos){setCash(function(c){var nc=c+pos.invested;saveCash(nc);return nc;});}
+      return u;
     });
-  }, []);
+  }
 
-  // ── Congress.gov: ruoli live ─────────────────────────────────────────────
-  var fetchCongressRoles = useCallback(async function(apiKey) {
-    if (!apiKey) return;
-    setApiStatus(function(s) { return Object.assign({}, s, { congress: "loading" }); });
-    try {
-      var res = await fetch(
-        "https://api.congress.gov/v3/member?currentMember=true&limit=250&api_key=" + apiKey
-      );
-      if (!res.ok) throw new Error("Congress API " + res.status);
-      var data = await res.json();
-      var members = data.members || [];
-      var newRoles = Object.assign({}, STATIC_ROLES);
-      members.forEach(function(m) {
-        var leadership = m.leadership || [];
-        var bestTier = 0;
-        var bestRole = null;
-        leadership.forEach(function(l) {
-          var tier = getTierFromTitle(l.type);
-          if (tier > bestTier) { bestTier = tier; bestRole = l.type; }
-        });
-        if (bestTier > 0 && m.name) {
-          var label = (bestRole || "")
-            .replace("House ", "").replace("Senate ", "")
-            .replace("Majority ", "Maj. ").replace("Minority ", "Min. ")
-            .replace("Committee on ", "").slice(0, 22);
-          newRoles[m.name] = { role: label, tier: bestTier };
-        }
-      });
-      setRoleRegistry(newRoles);
-      setApiStatus(function(s) { return Object.assign({}, s, { congress: "ok" }); });
-    } catch (e) {
-      console.warn("Congress.gov:", e.message);
-      setApiStatus(function(s) { return Object.assign({}, s, { congress: "error" }); });
-    }
-  }, []);
+  // ── Render helpers ────────────────────────────────────────────────────────
+  var sel=function(s,opts){return h("select",{value:s.value,onChange:function(e){s.set(e.target.value);},style:{width:"100%",background:"#050810",border:"1px solid #1A2A4A",color:s.color||"#C8D8F0",padding:"8px 10px",fontSize:"12px",borderRadius:"2px",outline:"none"}},opts.map(function(o){return h("option",{key:o.v,value:o.v},o.l);}));};
 
-  // ── Quiver: top trader live ──────────────────────────────────────────────
-  var fetchQuiverTopTraders = useCallback(async function(apiKey) {
-    if (!apiKey) return;
-    setApiStatus(function(s) { return Object.assign({}, s, { quiver: "loading" }); });
-    try {
-      var res = await fetch("https://api.quiverquant.com/beta/bulk/congresstrading", {
-        headers: { "Authorization": "Token " + apiKey, "Accept": "application/json" },
-      });
-      if (!res.ok) throw new Error("Quiver API " + res.status);
-      var data = await res.json();
-      var cutoff = new Date();
-      cutoff.setFullYear(cutoff.getFullYear() - 1);
-      var volumeMap = {};
-      data.forEach(function(t) {
-        var d = new Date(t.Date || t.TransactionDate);
-        if (d < cutoff) return;
-        var name = t.Representative || t.Senator;
-        if (!name) return;
-        volumeMap[name] = (volumeMap[name] || 0) + (parseAmount(t.Amount) || 0);
-      });
-      var sorted = Object.entries(volumeMap).sort(function(a, b) { return b[1] - a[1]; }).slice(0, 10);
-      setRoleRegistry(function(prev) {
-        var updated = Object.assign({}, prev);
-        sorted.forEach(function(entry) {
-          var name = entry[0];
-          var vol  = entry[1];
-          var ex   = updated[name];
-          if (!ex || ex.tier >= 4) {
-            updated[name] = { role: "Top Trader · " + formatAmount(vol), tier: 4 };
-          }
-        });
-        return updated;
-      });
-      setApiStatus(function(s) { return Object.assign({}, s, { quiver: "ok" }); });
-    } catch (e) {
-      console.warn("Quiver:", e.message);
-      setApiStatus(function(s) { return Object.assign({}, s, { quiver: "error" }); });
-    }
-  }, []);
+  var phaseLabel=loadPhase==="fast"?"Caricamento recenti...":loadPhase==="full"?"Aggiornamento storico...":loadPhase==="error"?"Dati offline":"";
 
-  useEffect(function() {
-    if (keys.congress) fetchCongressRoles(keys.congress);
-    if (keys.quiver)   fetchQuiverTopTraders(keys.quiver);
-  }, [keys, fetchCongressRoles, fetchQuiverTopTraders]);
-
-  // ── Fetch operazioni: fase 1 veloce + fase 2 background ─────────────────
-  var fetchTrades = useCallback(async function() {
-    // Fase 1 — file leggero con ultime transazioni
-    try {
-      setLoadPhase("fast");
-      var r1 = await fetch("https://house-stock-watcher-data.s3-us-west-2.amazonaws.com/data/fillings.json");
-      if (!r1.ok) throw new Error("fast failed");
-      var raw1 = await r1.json();
-      var recent = raw1.slice(0, 100).map(parseTrade);
-      var newOnes1 = recent.filter(function(t) { return !prevIds.current.has(t.id); });
-      newOnes1.forEach(function(t) { prevIds.current.add(t.id); });
-      if (newOnes1.length > 0) {
-        setTrades(function(prev) {
-          return newOnes1.concat(prev).sort(function(a, b) {
-            return new Date(b.transaction_date) - new Date(a.transaction_date);
-          });
-        });
-        setLastUpdate(new Date());
-        setLoading(false);
-      }
-    } catch (e) {
-      console.warn("Fast endpoint:", e.message);
-    }
-    setLoadPhase("full");
-
-    // Fase 2 — dataset completo in background
-    try {
-      var r2 = await fetch("https://house-stock-watcher-data.s3-us-west-2.amazonaws.com/data/all_transactions.json");
-      if (!r2.ok) throw new Error("full failed");
-      var raw2 = await r2.json();
-      var all = raw2.map(parseTrade).sort(function(a, b) {
-        return new Date(b.transaction_date) - new Date(a.transaction_date);
-      });
-      all.forEach(function(t) { prevIds.current.add(t.id); });
-      setTrades(enrichTrades(all));
-      setLastUpdate(new Date());
-      setLoading(false);
-      setLoadPhase("done");
-    } catch (e) {
-      console.warn("Full dataset:", e.message);
-      setLoadPhase("error");
-      setTrades(function(prev) {
-        if (prev.length === 0) {
-          var mock = generateMockTrades(50);
-          mock.forEach(function(t) { prevIds.current.add(t.id); });
-          setLoading(false);
-          setLastUpdate(new Date());
-          return enrichTrades(mock);
-        }
-        return prev;
-      });
-    }
-  }, [parseTrade]);
-
-  useEffect(function() {
-    fetchTrades();
-    var interval = setInterval(function() {
-      setTrades(function(prev) {
-        if (prev.length > 0 && Math.random() > 0.4) {
-          var ticker  = MOCK_TICKERS[Math.floor(Math.random() * MOCK_TICKERS.length)];
-          var amount  = MOCK_AMOUNTS[Math.floor(Math.random() * MOCK_AMOUNTS.length)];
-          var repName = MOCK_MEMBERS[Math.floor(Math.random() * MOCK_MEMBERS.length)];
-          var info    = getMemberInfoStatic(repName);
-          var newTrade = {
-            id: "live-" + Date.now(),
-            representative: repName,
-            ticker: ticker,
-            type: MOCK_TYPES[Math.floor(Math.random() * MOCK_TYPES.length)],
-            transaction_date: new Date().toISOString().split("T")[0],
-            amount: amount,
-            amountNum: parseAmount(amount),
-            sector: getSector(ticker),
-            isNew: true,
-            role: info.role,
-            tier: info.tier,
-          };
-          setAlerts(function(a) {
-            return [{ id: newTrade.id, text: "LIVE: " + newTrade.representative + " — " + newTrade.ticker + " " + newTrade.type + " " + newTrade.amount, time: new Date() }]
-              .concat(a).slice(0, 10);
-          });
-          setLastUpdate(new Date());
-          return [newTrade].concat(prev.slice(0, 199));
-        }
-        return prev;
-      });
-    }, 8000);
-    return function() { clearInterval(interval); };
-  }, [fetchTrades]);
-
-  // Filtri
-  useEffect(function() {
-    var result = trades.slice();
-    if (filters.member.trim()) {
-      var q = filters.member.toLowerCase();
-      result = result.filter(function(t) {
-        return t.representative.toLowerCase().includes(q) || t.ticker.toLowerCase().includes(q);
-      });
-    }
-    if (filters.sector !== "All") result = result.filter(function(t) { return t.sector === filters.sector; });
-    if (filters.type   !== "All") result = result.filter(function(t) { return t.type.toLowerCase().includes(filters.type.toLowerCase()); });
-    if (filters.minAmount > 0)    result = result.filter(function(t) { return t.amountNum >= filters.minAmount; });
-    if (filters.minRisk !== "All") {
-      var minScore = filters.minRisk === "ALTO" ? 66 : filters.minRisk === "MEDIO" ? 36 : 0;
-      var maxScore = filters.minRisk === "MEDIO" ? 65 : 100;
-      result = result.filter(function(t) {
-        var s = t.anomaly ? t.anomaly.score : 0;
-        return s >= minScore && s <= maxScore;
-      });
-    }
-    setFiltered(result);
-  }, [trades, filters]);
-
-  // Ticker scorrevole
-  useEffect(function() {
-    if (trades.length > 0) {
-      var text = trades.slice(0, 15).map(function(t) {
-        return t.ticker + " · " + t.representative.split(" ").pop() + " · " + (t.type === "Purchase" ? "▲" : "▼") + " " + t.amount;
-      }).join("   ░░░   ");
-      setTickerText(text);
-    }
-  }, [trades]);
-
-  function isSale(type) { return type && type.toLowerCase().includes("sale"); }
-
-  function StatusDot(props) {
-    var colors = { idle: "#4A6A9A", loading: "#FFB347", ok: "#00D4AA", error: "#FF4455" };
-    return (
-      <span style={{
-        display: "inline-block", width: "7px", height: "7px",
-        borderRadius: "50%", background: colors[props.status] || "#4A6A9A",
-        marginRight: "5px", verticalAlign: "middle",
-      }} />
+  // ── Portfolio page ────────────────────────────────────────────────────────
+  function PortfolioPage(){
+    var totInv=portfolio.reduce(function(s,p){return s+p.invested;},0);
+    var totCur=portfolio.reduce(function(s,p){var pr=livePrices[p.ticker]||p.entryPrice;return s+(p.shares*pr);},0);
+    var totPnl=totCur-totInv;
+    var totPct=totInv>0?(totPnl/totInv)*100:0;
+    return h("div",{style:{maxWidth:"1000px",margin:"0 auto",padding:"24px 16px"}},
+      // Header
+      h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:"24px"}},
+        h("div",null,
+          h("div",{style:{fontSize:"11px",color:"#4A6A9A",letterSpacing:"0.2em",marginBottom:"4px"}},"SIMULATORE"),
+          h("h1",{style:{fontSize:"20px",fontWeight:"bold",color:"#E8F4FF"}},"IL MIO PORTFOLIO"),
+          h("div",{style:{display:"flex",alignItems:"center",gap:"8px",marginTop:"6px"}},
+            h("div",{style:{width:"7px",height:"7px",borderRadius:"50%",background:pricesLoading?"#FFB347":"#00D4AA",animation:pricesLoading?"pulse 1s ease-in-out infinite":"none"}}),
+            h("span",{style:{fontSize:"10px",color:"#4A6A9A"}},pricesLoading?"Aggiornamento prezzi...":lastPriceUpdate?"Prezzi live: "+lastPriceUpdate.toLocaleTimeString("it-IT"):"In attesa di prezzi...")
+          )
+        ),
+        h("div",{style:{textAlign:"right"}},
+          h("div",{style:{fontSize:"10px",color:"#4A6A9A",marginBottom:"4px"}},"LIQUIDITÀ"),
+          editingCash
+            ? h("div",{style:{display:"flex",gap:"6px",alignItems:"center",justifyContent:"flex-end"}},
+                h("input",{type:"number",value:cashInput,onChange:function(e){setCashInput(e.target.value);},style:{width:"120px",background:"#050810",border:"1px solid #00D4AA",color:"#E8F4FF",padding:"6px 8px",fontSize:"14px",borderRadius:"2px",outline:"none"}}),
+                h("button",{onClick:function(){var v=parseFloat(cashInput);if(!isNaN(v)&&v>=0){setCash(v);saveCash(v);}setEditingCash(false);},style:{background:"#00D4AA",color:"#050810",border:"none",padding:"6px 10px",fontWeight:"bold",cursor:"pointer",borderRadius:"2px"}},"✓"),
+                h("button",{onClick:function(){setEditingCash(false);},style:{background:"transparent",border:"1px solid #1A2A4A",color:"#4A6A9A",padding:"6px 10px",cursor:"pointer",borderRadius:"2px"}},"✕")
+              )
+            : h("div",null,
+                h("div",{style:{fontSize:"22px",fontWeight:"bold",color:"#00D4AA"}},"$"+cash.toLocaleString()),
+                h("button",{onClick:function(){setCashInput(String(cash));setEditingCash(true);},style:{marginTop:"4px",background:"transparent",border:"1px solid #1A2A4A",color:"#4A6A9A",padding:"3px 10px",fontSize:"10px",cursor:"pointer",borderRadius:"2px"}},"✎ modifica saldo")
+              )
+        )
+      ),
+      // Stats
+      portfolio.length>0 && h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr",gap:"12px",marginBottom:"24px"}},
+        [{label:"INVESTITO",val:"$"+totInv.toLocaleString()},
+         {label:"VALORE ATTUALE",val:"$"+totCur.toFixed(0),color:totCur>=totInv?"#00D4AA":"#FF4455"},
+         {label:"P&L",val:(totPnl>=0?"+":"")+totPnl.toFixed(0)+"$",color:totPnl>=0?"#00D4AA":"#FF4455"},
+         {label:"RENDIMENTO",val:(totPct>=0?"+":"")+totPct.toFixed(2)+"%",color:totPct>=0?"#00D4AA":"#FF4455"}
+        ].map(function(s){return h("div",{key:s.label,style:{background:"#0A0F1E",border:"1px solid #1A2A4A",padding:"14px 16px",borderRadius:"4px"}},
+          h("div",{style:{fontSize:"10px",color:"#4A6A9A",letterSpacing:"0.12em",marginBottom:"6px"}},s.label),
+          h("div",{style:{fontSize:"18px",fontWeight:"bold",color:s.color||"#E8F4FF"}},s.val)
+        );})
+      ),
+      // Empty state
+      portfolio.length===0 && h("div",{style:{textAlign:"center",padding:"60px 20px",color:"#4A6A9A"}},
+        h("div",{style:{fontSize:"40px",marginBottom:"16px"}},"📭"),
+        h("div",{style:{fontSize:"14px",color:"#8AA0C0",marginBottom:"8px"}},"Nessuna posizione"),
+        h("div",{style:{fontSize:"12px"}},"Vai al Tracker → clicca una trade → Aggiungi al Portfolio")
+      ),
+      // Positions
+      portfolio.map(function(pos){
+        fetchLivePrice(pos.ticker);
+        var lp=livePrices[pos.ticker]||pos.entryPrice;
+        var cv=pos.shares*lp;
+        var pnl=cv-pos.invested;
+        var pnlPct=pos.invested>0?(pnl/pos.invested)*100:0;
+        var isP=pnl>=0;
+        return h("div",{key:pos.id,style:{background:"#0A0F1E",border:"1px solid #1A2A4A",borderLeft:"3px solid "+(isP?"#00D4AA":"#FF4455"),borderRadius:"4px",padding:"16px",marginBottom:"12px"}},
+          h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:"10px"}},
+            h("div",null,
+              h("span",{style:{fontSize:"18px",fontWeight:"bold",color:"#E8F4FF",marginRight:"10px"}},pos.ticker),
+              h("span",{style:{fontSize:"11px",color:"#4A6A9A"}},pos.sector),
+              pos.anomalyLevel&&pos.anomalyLevel!=="—"&&h("span",{style:{marginLeft:"8px",fontSize:"10px",color:pos.anomalyLevel==="ALTO"?"#FF4455":"#FFB347",border:"1px solid",padding:"1px 6px",borderRadius:"2px"}},"⚠ "+pos.anomalyLevel)
+            ),
+            h("div",{style:{textAlign:"right"}},
+              h("div",{style:{fontSize:"20px",fontWeight:"bold",color:isP?"#00D4AA":"#FF4455"}},(isP?"+":"")+pnlPct.toFixed(2)+"%"),
+              h("div",{style:{fontSize:"12px",color:isP?"#00D4AA":"#FF4455"}},(isP?"+":"")+pnl.toFixed(0)+"$")
+            )
+          ),
+          h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr",gap:"8px",marginBottom:"10px"}},
+            [{label:"INVESTITO",val:"$"+pos.invested.toLocaleString()},
+             {label:"ENTRATA",val:"$"+pos.entryPrice.toFixed(2)},
+             {label:"PREZZO LIVE",val:livePrices[pos.ticker]?"$"+livePrices[pos.ticker].toFixed(2):"—",color:"#8AA0C0"},
+             {label:"VALORE ATT.",val:"$"+cv.toFixed(2),color:isP?"#00D4AA":"#FF4455"}
+            ].map(function(it){return h("div",{key:it.label,style:{background:"#080C18",padding:"8px 10px",borderRadius:"3px"}},
+              h("div",{style:{fontSize:"9px",color:"#4A6A9A",marginBottom:"3px"}},it.label),
+              h("div",{style:{fontSize:"12px",color:it.color||"#C8D8F0",fontWeight:"bold"}},it.val)
+            );})
+          ),
+          h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center"}},
+            h("div",{style:{fontSize:"10px",color:"#4A6A9A"}},"Seguendo "+pos.member+" · "+pos.tradeDate),
+            h("button",{onClick:function(){removePos(pos.id);},style:{background:"transparent",border:"1px solid #FF4455",color:"#FF4455",padding:"4px 12px",fontSize:"11px",cursor:"pointer",borderRadius:"2px"}},"✕ Chiudi")
+          )
+        );
+      })
     );
   }
 
-  var phaseLabel = loadPhase === "fast" ? "CARICAMENTO RECENTI..." : loadPhase === "full" ? "AGGIORNAMENTO STORICO IN BACKGROUND..." : loadPhase === "error" ? "USANDO DATI OFFLINE" : "";
-  var phaseWidth = loadPhase === "fast" ? "30%" : loadPhase === "full" ? "70%" : "100%";
-
-  // ── Render ───────────────────────────────────────────────────────────────
-  return (
-    <div style={{ background: "#050810", minHeight: "100vh", color: "#C8D8F0", fontFamily: "'Courier New', Courier, monospace" }}>
-
-      <style>{`
-        @keyframes ticker  { from { transform: translateX(0); } to { transform: translateX(-50%); } }
-        @keyframes fadeIn  { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: translateY(0); } }
-        @keyframes pulse   { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
-        .trade-row:hover   { background: #0D1830 !important; }
-        .new-badge         { animation: pulse 2s ease-in-out 3; }
-        ::-webkit-scrollbar       { width: 4px; }
-        ::-webkit-scrollbar-track { background: #050810; }
-        ::-webkit-scrollbar-thumb { background: #1A2A4A; border-radius: 2px; }
-      `}</style>
-
-      {/* SETUP MODAL */}
-      {showSetup && (
-        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.85)", zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center" }}>
-          <div style={{ background: "#0A0F1E", border: "1px solid #1A2A4A", borderRadius: "6px", padding: "28px", width: "480px", maxWidth: "95vw" }}>
-            <div style={{ fontSize: "11px", color: "#4A6A9A", letterSpacing: "0.2em", marginBottom: "6px" }}>CONFIGURAZIONE API</div>
-            <h2 style={{ margin: "0 0 20px", color: "#E8F4FF", fontSize: "16px" }}>Connetti le sorgenti dati live</h2>
-
-            <div style={{ marginBottom: "20px" }}>
-              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "6px" }}>
-                <label style={{ fontSize: "11px", color: "#00C8FF", letterSpacing: "0.1em" }}>CONGRESS.GOV API KEY</label>
-                <span style={{ fontSize: "10px", color: "#4A6A9A" }}>
-                  <StatusDot status={apiStatus.congress} />
-                  {apiStatus.congress === "ok" ? "Connesso" : apiStatus.congress === "error" ? "Errore" : apiStatus.congress === "loading" ? "..." : "Non configurato"}
-                </span>
-              </div>
-              <input type="password" placeholder="Incolla la tua API key…" value={keyDraft.congress}
-                onChange={function(e) { setKeyDraft(function(d) { return Object.assign({}, d, { congress: e.target.value }); }); }}
-                style={{ width: "100%", background: "#050810", border: "1px solid #1A2A4A", color: "#C8D8F0", padding: "9px 12px", fontSize: "12px", fontFamily: "'Courier New', monospace", borderRadius: "2px", boxSizing: "border-box", outline: "none" }}
-              />
-              <div style={{ fontSize: "10px", color: "#4A6A9A", marginTop: "5px" }}>Gratuita → api.congress.gov/sign-up</div>
-            </div>
-
-            <div style={{ marginBottom: "24px" }}>
-              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "6px" }}>
-                <label style={{ fontSize: "11px", color: "#C084FC", letterSpacing: "0.1em" }}>QUIVER QUANTITATIVE API KEY</label>
-                <span style={{ fontSize: "10px", color: "#4A6A9A" }}>
-                  <StatusDot status={apiStatus.quiver} />
-                  {apiStatus.quiver === "ok" ? "Connesso" : apiStatus.quiver === "error" ? "Errore" : apiStatus.quiver === "loading" ? "..." : "Non configurato"}
-                </span>
-              </div>
-              <input type="password" placeholder="Incolla la tua API key…" value={keyDraft.quiver}
-                onChange={function(e) { setKeyDraft(function(d) { return Object.assign({}, d, { quiver: e.target.value }); }); }}
-                style={{ width: "100%", background: "#050810", border: "1px solid #1A2A4A", color: "#C8D8F0", padding: "9px 12px", fontSize: "12px", fontFamily: "'Courier New', monospace", borderRadius: "2px", boxSizing: "border-box", outline: "none" }}
-              />
-              <div style={{ fontSize: "10px", color: "#4A6A9A", marginTop: "5px" }}>Piano free → quiverquant.com</div>
-            </div>
-
-            <div style={{ display: "flex", gap: "10px" }}>
-              <button onClick={function() { saveKeys(keyDraft); setKeys(Object.assign({}, keyDraft)); setShowSetup(false); }}
-                style={{ flex: 1, background: "#00D4AA", color: "#050810", border: "none", padding: "10px", fontSize: "12px", fontFamily: "'Courier New', monospace", fontWeight: "bold", cursor: "pointer", borderRadius: "2px" }}>
-                SALVA E CONNETTI
-              </button>
-              <button onClick={function() { setShowSetup(false); }}
-                style={{ background: "transparent", color: "#4A6A9A", border: "1px solid #1A2A4A", padding: "10px 16px", fontSize: "12px", fontFamily: "'Courier New', monospace", cursor: "pointer", borderRadius: "2px" }}>
-                Annulla
-              </button>
-            </div>
-            <div style={{ marginTop: "14px", fontSize: "10px", color: "#2A3A5A" }}>
-              Le chiavi sono salvate solo nel tuo browser (localStorage).
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* DETAIL MODAL */}
-      {selectedTrade && (
-        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.88)", zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center" }}
-          onClick={function() { setSelectedTrade(null); setTickerDetail(null); }}>
-          <div style={{ background: "#0A0F1E", border: "1px solid #1A2A4A", borderRadius: "6px", padding: "28px", width: "560px", maxWidth: "95vw", maxHeight: "90vh", overflowY: "auto" }}
-            onClick={function(e) { e.stopPropagation(); }}>
-
-            {/* Intestazione */}
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "20px" }}>
-              <div>
-                <div style={{ fontSize: "10px", color: "#4A6A9A", letterSpacing: "0.2em", marginBottom: "4px" }}>DETTAGLIO OPERAZIONE</div>
-                <div style={{ fontSize: "24px", fontWeight: "bold", color: "#E8F4FF" }}>{selectedTrade.ticker}</div>
-                {detailLoading && <div style={{ fontSize: "11px", color: "#4A6A9A", animation: "pulse 1s ease-in-out infinite" }}>Caricamento dati mercato...</div>}
-                {tickerDetail && !detailLoading && <div style={{ fontSize: "13px", color: "#8AA0C0", marginTop: "2px" }}>{tickerDetail.longName}</div>}
-              </div>
-              <button onClick={function() { setSelectedTrade(null); setTickerDetail(null); }}
-                style={{ background: "transparent", border: "1px solid #1A2A4A", color: "#4A6A9A", width: "28px", height: "28px", borderRadius: "2px", cursor: "pointer", fontSize: "14px", fontFamily: "monospace" }}>✕</button>
-            </div>
-
-            {/* Dati ticker: ISIN + mercato */}
-            {tickerDetail && (
-              <div>
-                {/* ISIN / CUSIP / FIGI in evidenza */}
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "10px", marginBottom: "14px" }}>
-                  {[
-                    { label: "ISIN",  value: tickerDetail.isin,  color: tickerDetail.isin  ? "#00D4AA" : null },
-                    { label: "CUSIP", value: tickerDetail.cusip, color: tickerDetail.cusip ? "#00C8FF" : null },
-                    { label: "FIGI",  value: tickerDetail.figi,  color: "#8AA0C0" },
-                  ].map(function(item) {
-                    return (
-                      <div key={item.label} style={{ background: "#080C18", border: "1px solid " + (item.color ? item.color + "44" : "#1A2A4A"), padding: "10px 12px", borderRadius: "3px", borderTop: "2px solid " + (item.color || "#1A2A4A") }}>
-                        <div style={{ fontSize: "9px", color: "#4A6A9A", letterSpacing: "0.15em", marginBottom: "5px" }}>{item.label}</div>
-                        <div style={{ fontSize: "11px", color: item.value ? (item.color || "#C8D8F0") : "#2A3A5A", fontWeight: "bold", fontFamily: "monospace", wordBreak: "break-all" }}>
-                          {item.value || "Non disponibile"}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-
-                {/* Dati mercato */}
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "10px", marginBottom: "20px" }}>
-                  {[
-                    { label: "NOME COMPLETO", value: tickerDetail.longName },
-                    { label: "EXCHANGE",      value: tickerDetail.exchange },
-                    { label: "SETTORE FIGI",  value: tickerDetail.marketSector },
-                    { label: "TIPO",          value: tickerDetail.type },
-                    { label: "VALUTA",        value: tickerDetail.currency },
-                    { label: "TIMEZONE",      value: tickerDetail.timezone },
-                    tickerDetail.currentPrice ? { label: "PREZZO ATTUALE", value: tickerDetail.currency + " " + tickerDetail.currentPrice.toFixed(2), color: "#00D4AA" } : null,
-                    tickerDetail.prevClose    ? { label: "CHIUSURA PREC.", value: tickerDetail.currency + " " + tickerDetail.prevClose.toFixed(2) } : null,
-                    tickerDetail.currentPrice && tickerDetail.prevClose ? {
-                      label: "VARIAZIONE",
-                      value: (((tickerDetail.currentPrice - tickerDetail.prevClose) / tickerDetail.prevClose) * 100).toFixed(2) + "%",
-                      color: tickerDetail.currentPrice >= tickerDetail.prevClose ? "#00D4AA" : "#FF4455",
-                    } : null,
-                  ].filter(Boolean).map(function(item) {
-                    return (
-                      <div key={item.label} style={{ background: "#080C18", border: "1px solid #1A2A4A", padding: "10px 12px", borderRadius: "3px" }}>
-                        <div style={{ fontSize: "9px", color: "#4A6A9A", letterSpacing: "0.15em", marginBottom: "4px" }}>{item.label}</div>
-                        <div style={{ fontSize: "12px", color: item.color || "#C8D8F0", fontWeight: item.color ? "bold" : "normal", wordBreak: "break-word" }}>{item.value || "—"}</div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
-
-            {/* SCORE ANOMALIA */}
-            {selectedTrade.anomaly && (
-              <div style={{ background: selectedTrade.anomaly.bg, border: "1px solid " + selectedTrade.anomaly.border, borderRadius: "4px", padding: "16px", marginBottom: "20px" }}>
-                <div style={{ display: "flex", alignItems: "center", gap: "16px", marginBottom: "14px" }}>
-                  <div style={{
-                    width: "56px", height: "56px", borderRadius: "50%",
-                    background: selectedTrade.anomaly.color,
-                    display: "flex", alignItems: "center", justifyContent: "center",
-                    fontSize: "18px", fontWeight: "bold", color: "#050810",
-                    boxShadow: "0 0 16px " + selectedTrade.anomaly.color + "88", flexShrink: 0,
-                  }}>{selectedTrade.anomaly.score}</div>
-                  <div>
-                    <div style={{ fontSize: "10px", color: "#4A6A9A", letterSpacing: "0.2em", marginBottom: "4px" }}>INDICE ANOMALIA INSIDER</div>
-                    <div style={{ fontSize: "20px", fontWeight: "bold", color: selectedTrade.anomaly.color }}>
-                      RISCHIO {selectedTrade.anomaly.level}
-                    </div>
-                    <div style={{ fontSize: "11px", color: "#4A6A9A", marginTop: "2px" }}>
-                      Commissione {selectedTrade.anomaly.breakdown.committee}/40 · Timing {selectedTrade.anomaly.breakdown.timing}/35 · Volume {selectedTrade.anomaly.breakdown.volume}/25 · Leva {selectedTrade.anomaly.breakdown.leverage}/10
-                    </div>
-                  </div>
-                </div>
-                {selectedTrade.anomaly.reasons.length > 0 && (
-                  <div style={{ borderTop: "1px solid " + selectedTrade.anomaly.border, paddingTop: "12px" }}>
-                    <div style={{ fontSize: "10px", color: "#4A6A9A", letterSpacing: "0.15em", marginBottom: "8px" }}>FATTORI RILEVATI</div>
-                    {selectedTrade.anomaly.reasons.map(function(r, i) {
-                      return (
-                        <div key={i} style={{ fontSize: "11px", color: "#8AA0C0", marginBottom: "6px", lineHeight: "1.5", paddingLeft: "4px", borderLeft: "2px solid " + selectedTrade.anomaly.color + "66" }}>
-                          {r}
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-                {selectedTrade.anomaly.reasons.length === 0 && (
-                  <div style={{ fontSize: "11px", color: "#4A6A9A" }}>Nessun fattore di rischio rilevato. Operazione nella norma.</div>
-                )}
-              </div>
-            )}
-
-            {/* Divisore */}
-            <div style={{ borderTop: "1px solid #1A2A4A", marginBottom: "20px" }} />
-
-            {/* Dati operazione */}
-            <div style={{ fontSize: "10px", color: "#4A6A9A", letterSpacing: "0.2em", marginBottom: "12px" }}>DATI OPERAZIONE DICHIARATA</div>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px", marginBottom: "20px" }}>
-              {[
-                { label: "MEMBRO",              value: selectedTrade.representative },
-                { label: "RUOLO",               value: selectedTrade.role || "Membro del Congresso" },
-                { label: "DATA OPERAZIONE",     value: selectedTrade.transaction_date },
-                { label: "TIPO",                value: selectedTrade.type },
-                { label: "IMPORTO DICHIARATO",  value: selectedTrade.amount, color: "#FFB347" },
-                { label: "SETTORE",             value: selectedTrade.sector },
-                { label: "PATRIMONIO STIMATO",  value: selectedTrade.netWorth ? formatAmount(selectedTrade.netWorth) : "Non disponibile", color: "#8AA0C0" },
-                { label: "% PATRIMONIO",        value: selectedTrade.wealthPct ? formatPct(selectedTrade.wealthPct) : "Non disponibile",
-                  color: selectedTrade.wealthPct ? (selectedTrade.wealthPct >= 5 ? "#FF4455" : selectedTrade.wealthPct >= 1 ? "#FFB347" : "#8AA0C0") : null },
-              ].map(function(item) {
-                var ts = selectedTrade.tier > 0 ? TIER_STYLE[selectedTrade.tier] : null;
-                return (
-                  <div key={item.label} style={{ background: ts && item.label === "RUOLO" ? ts.bg : "#080C18", border: "1px solid " + (ts && item.label === "RUOLO" ? ts.border : "#1A2A4A"), padding: "10px 12px", borderRadius: "3px" }}>
-                    <div style={{ fontSize: "9px", color: "#4A6A9A", letterSpacing: "0.15em", marginBottom: "4px" }}>{item.label}</div>
-                    <div style={{ fontSize: "12px", color: item.color || (ts && item.label === "RUOLO" ? ts.color : "#C8D8F0"), fontWeight: item.color || (ts && item.label === "RUOLO") ? "bold" : "normal" }}>{item.value || "—"}</div>
-                  </div>
-                );
-              })}
-            </div>
-
-            {/* Tipo strumento */}
-            {selectedTrade.instrument && (
-              <div style={{ background: "#080C18", border: "1px solid " + selectedTrade.instrument.color + "44", borderLeft: "3px solid " + selectedTrade.instrument.color, padding: "10px 14px", borderRadius: "3px", marginBottom: "16px" }}>
-                <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-                  <span style={{ fontSize: "13px", fontWeight: "bold", color: selectedTrade.instrument.color, fontFamily: "monospace" }}>{selectedTrade.instrument.label}</span>
-                  <span style={{ fontSize: "11px", color: "#8AA0C0" }}>{selectedTrade.instrument.desc}</span>
-                </div>
-              </div>
-            )}
-
-            {/* Nota ISIN contestuale */}
-            {tickerDetail && tickerDetail.description && (
-              <div style={{ background: "#080C18", border: "1px solid #1A2A4A", borderLeft: "3px solid #4A6A9A", padding: "10px 14px", borderRadius: "3px", marginBottom: "16px", fontSize: "11px", color: "#8AA0C0", lineHeight: "1.6" }}>
-                {tickerDetail.description}
-              </div>
-            )}
-            {/* Nota ISIN */}
-            <div style={{ background: "#080C18", border: "1px solid #1A2A4A", borderLeft: "3px solid #4A6A9A", padding: "10px 14px", borderRadius: "3px", marginBottom: "16px", fontSize: "11px", color: "#4A6A9A", lineHeight: "1.6" }}>
-              {tickerDetail && tickerDetail.isin
-                ? "✅ ISIN recuperato automaticamente. Il codice ISIN non è incluso nelle disclosure STOCK Act — viene risolto dal ticker."
-                : "ℹ️ ISIN non disponibile per questo ticker. Potrebbe trattarsi di un'opzione, un warrant, o un titolo molto recente. Cerca manualmente su openfigi.com o isin.org."
-              }
-            </div>
-
-            {/* Link esterni */}
-            <div style={{ fontSize: "10px", color: "#4A6A9A", letterSpacing: "0.15em", marginBottom: "8px" }}>RISORSE ESTERNE</div>
-            <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
-              {[
-                { label: "Yahoo Finance", url: "https://finance.yahoo.com/quote/" + selectedTrade.ticker },
-                { label: "OpenFIGI / ISIN", url: "https://www.openfigi.com/search#!?simpleSearchString=" + selectedTrade.ticker },
-                { label: "Capitol Trades", url: "https://www.capitoltrades.com/trades?ticker=" + selectedTrade.ticker },
-                { label: "Quiver Congress", url: "https://www.quiverquant.com/sources/congresstrading" },
-              ].map(function(link) {
-                return (
-                  <a key={link.label} href={link.url} target="_blank" rel="noreferrer"
-                    style={{ background: "#0D1426", border: "1px solid #1A2A4A", color: "#00C8FF", padding: "6px 12px", fontSize: "11px", borderRadius: "2px", textDecoration: "none", fontFamily: "monospace" }}>
-                    {link.label} ↗
-                  </a>
-                );
-              })}
-            </div>
-          </div>
-        </div>
-      )}
-      <div style={{ background: "#0D1426", borderBottom: "1px solid #1A2A4A", padding: "8px 0", overflow: "hidden" }}>
-        <div style={{ whiteSpace: "nowrap", display: "inline-block", animation: "ticker 60s linear infinite", color: "#00D4AA", fontSize: "12px", letterSpacing: "0.05em" }}>
-          {tickerText || "CARICAMENTO DATI..."}&nbsp;&nbsp;&nbsp;{tickerText}
-        </div>
-      </div>
-
-      {/* BARRA DI FASE */}
-      {loadPhase !== "done" && loadPhase !== "idle" && (
-        <div style={{ height: "2px", background: "#0D1426", position: "relative", overflow: "hidden" }}>
-          <div style={{ position: "absolute", top: 0, left: 0, height: "100%", background: loadPhase === "error" ? "#FF4455" : "#00D4AA", width: phaseWidth, transition: "width 0.8s ease" }} />
-        </div>
-      )}
-
-      <div style={{ maxWidth: "1400px", margin: "0 auto", padding: "20px 16px" }}>
-
-        {/* HEADER */}
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "24px" }}>
-          <div>
-            <div style={{ fontSize: "11px", color: "#4A6A9A", letterSpacing: "0.2em", marginBottom: "4px" }}>SISTEMA DI MONITORAGGIO</div>
-            <h1 style={{ margin: 0, fontSize: "22px", fontWeight: "bold", color: "#E8F4FF", letterSpacing: "0.05em" }}>CONGRESS TRADE TRACKER</h1>
-            <div style={{ fontSize: "11px", color: "#4A6A9A", marginTop: "4px" }}>STOCK ACT 2012 · DATI PUBBLICI</div>
-          </div>
-          <div style={{ textAlign: "right" }}>
-            <div style={{ display: "flex", alignItems: "center", gap: "8px", justifyContent: "flex-end", marginBottom: "6px" }}>
-              <div style={{ width: "7px", height: "7px", borderRadius: "50%", background: "#00D4AA", animation: "pulse 2s ease-in-out infinite" }} />
-              <span style={{ color: "#00D4AA", fontSize: "12px" }}>LIVE</span>
-              <button onClick={function() { setKeyDraft(keys); setShowSetup(true); }}
-                style={{ background: "#0D1426", border: "1px solid #1A2A4A", color: "#4A6A9A", padding: "3px 10px", fontSize: "11px", fontFamily: "'Courier New', monospace", cursor: "pointer", borderRadius: "2px", marginLeft: "8px" }}>
-                ⚙ API
-              </button>
-            </div>
-            <div style={{ display: "flex", gap: "10px", justifyContent: "flex-end", marginBottom: "4px" }}>
-              <span style={{ fontSize: "10px", color: "#4A6A9A" }}><StatusDot status={apiStatus.congress} />Congress.gov</span>
-              <span style={{ fontSize: "10px", color: "#4A6A9A" }}><StatusDot status={apiStatus.quiver} />Quiver</span>
-            </div>
-            {lastUpdate && <div style={{ color: "#4A6A9A", fontSize: "11px" }}>Aggiornato: {lastUpdate.toLocaleTimeString("it-IT")}</div>}
-            <div style={{ color: "#4A6A9A", fontSize: "11px" }}>{filtered.length} operazioni {phaseLabel && ("· " + phaseLabel)}</div>
-          </div>
-        </div>
-
-        {/* ALERTS */}
-        {alerts.slice(0, 3).map(function(a) {
-          return (
-            <div key={a.id} style={{ background: "#0D1A10", border: "1px solid #1A4A2A", borderLeft: "3px solid #00D4AA", padding: "8px 14px", fontSize: "12px", color: "#00D4AA", marginBottom: "6px", animation: "fadeIn 0.3s ease", borderRadius: "2px" }}>
-              🔔 {a.text} <span style={{ color: "#4A6A9A", marginLeft: "12px" }}>{a.time.toLocaleTimeString("it-IT")}</span>
-            </div>
-          );
-        })}
-
-        {/* LEGGENDA PRIORITÀ */}
-        <div style={{ background: "#0A0F1E", border: "1px solid #1A2A4A", borderRadius: "4px", padding: "16px", marginBottom: "20px" }}>
-          <div style={{ fontSize: "10px", color: "#4A6A9A", letterSpacing: "0.2em", marginBottom: "12px" }}>GUIDA ALLA PRIORITÀ</div>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: "12px" }}>
-            {[
-              { tier: 1, icon: "👑", title: "LEADERSHIP",   why: "Speaker e Leader vedono tutta la legislazione prima che diventi pubblica.",          risk: "RISCHIO MASSIMO",  ex: "Pelosi, Johnson, Schumer" },
-              { tier: 2, icon: "⚡", title: "WHIP",         why: "Sanno in anticipo quali leggi passeranno. Info critica su settori regolamentati.",   risk: "RISCHIO ALTO",     ex: "Emmer, Clark, Durbin" },
-              { tier: 3, icon: "🏛️", title: "COMMITTEE",   why: "Ricevono briefing classificati e influenzano i settori su cui investono.",           risk: "RISCHIO ALTO",     ex: "Jordan, Tuberville, Schiff" },
-              { tier: 4, icon: "📈", title: "TOP TRADER",   why: "Storicamente documentati con rendimenti anomali (+50–100% annuo).",                  risk: "TRACK RECORD",     ex: "Crenshaw, Rouzer, Davidson" },
-            ].map(function(item) {
-              var s = TIER_STYLE[item.tier];
-              return (
-                <div key={item.tier} style={{ background: s.bg, border: "1px solid " + s.border, borderTop: "3px solid " + s.color, borderRadius: "3px", padding: "12px" }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "8px" }}>
-                    <span style={{ fontSize: "14px" }}>{item.icon}</span>
-                    <span style={{ fontSize: "11px", color: s.color, fontWeight: "bold" }}>{item.title}</span>
-                  </div>
-                  <p style={{ fontSize: "11px", color: "#8AA0C0", margin: "0 0 8px 0", lineHeight: "1.5" }}>{item.why}</p>
-                  <div style={{ fontSize: "10px", color: s.color, marginBottom: "4px" }}>⚠ {item.risk}</div>
-                  <div style={{ fontSize: "10px", color: "#4A6A9A", fontStyle: "italic" }}>es. {item.ex}</div>
-                </div>
+  // ── Tracker page ──────────────────────────────────────────────────────────
+  function TrackerPage(){
+    return h("div",null,
+      // Ticker bar
+      h("div",{style:{background:"#0D1426",borderBottom:"1px solid #1A2A4A",padding:"8px 0",overflow:"hidden"}},
+        h("div",{style:{whiteSpace:"nowrap",display:"inline-block",animation:"ticker 60s linear infinite",color:"#00D4AA",fontSize:"12px",letterSpacing:"0.05em"}},
+          (tickerText||"CARICAMENTO DATI...")+"   "+tickerText)
+      ),
+      // Phase bar
+      loadPhase!=="done"&&loadPhase!=="idle"&&h("div",{style:{height:"2px",background:"#0D1426",position:"relative",overflow:"hidden"}},
+        h("div",{style:{position:"absolute",top:0,left:0,height:"100%",
+          background:loadPhase==="error"?"#FF4455":"#00D4AA",
+          width:loadPhase==="fast"?"30%":loadPhase==="full"?"70%":"100%",
+          transition:"width 0.8s ease"}})
+      ),
+      h("div",{style:{maxWidth:"1400px",margin:"0 auto",padding:"20px 16px"}},
+        // Header
+        h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"24px"}},
+          h("div",null,
+            h("div",{style:{fontSize:"11px",color:"#4A6A9A",letterSpacing:"0.2em",marginBottom:"4px"}},"SISTEMA DI MONITORAGGIO"),
+            h("h1",{style:{fontSize:"22px",fontWeight:"bold",color:"#E8F4FF"}},"CONGRESS TRADE TRACKER"),
+            h("div",{style:{fontSize:"11px",color:"#4A6A9A"}},"STOCK ACT 2012 · DATI PUBBLICI")
+          ),
+          h("div",{style:{textAlign:"right"}},
+            h("div",{style:{display:"flex",alignItems:"center",gap:"8px",justifyContent:"flex-end",marginBottom:"6px"}},
+              h("div",{style:{width:"7px",height:"7px",borderRadius:"50%",background:"#00D4AA",animation:"pulse 2s ease-in-out infinite"}}),
+              h("span",{style:{color:"#00D4AA",fontSize:"12px"}},"LIVE"),
+              h("button",{onClick:function(){setKeyDraft(keys);setShowSetup(true);},style:{background:"#0D1426",border:"1px solid #1A2A4A",color:"#4A6A9A",padding:"3px 10px",fontSize:"11px",cursor:"pointer",borderRadius:"2px",marginLeft:"8px"}},"⚙ API")
+            ),
+            lastUpdate&&h("div",{style:{color:"#4A6A9A",fontSize:"11px"}},"Aggiornato: "+lastUpdate.toLocaleTimeString("it-IT")),
+            h("div",{style:{color:"#4A6A9A",fontSize:"11px"}},filtered.length+" operazioni"+(phaseLabel?" · "+phaseLabel:""))
+          )
+        ),
+        // Alerts
+        alerts.slice(0,3).map(function(a){return h("div",{key:a.id,style:{background:"#0D1A10",border:"1px solid #1A4A2A",borderLeft:"3px solid #00D4AA",padding:"8px 14px",fontSize:"12px",color:"#00D4AA",marginBottom:"6px",animation:"fadeIn 0.3s ease",borderRadius:"2px"}},"🔔 "+a.text+" ",h("span",{style:{color:"#4A6A9A"}},a.time.toLocaleTimeString("it-IT")));}),
+        // Priority legend
+        h("div",{style:{background:"#0A0F1E",border:"1px solid #1A2A4A",borderRadius:"4px",padding:"16px",marginBottom:"20px"}},
+          h("div",{style:{fontSize:"10px",color:"#4A6A9A",letterSpacing:"0.2em",marginBottom:"12px"}},"GUIDA ALLA PRIORITÀ"),
+          h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr",gap:"12px"}},
+            [{tier:1,icon:"👑",title:"LEADERSHIP",why:"Speaker e Leader vedono tutta la legislazione prima che diventi pubblica.",risk:"RISCHIO MASSIMO",ex:"Pelosi, Johnson, Schumer"},
+             {tier:2,icon:"⚡",title:"WHIP",why:"Sanno in anticipo quali leggi passeranno.",risk:"RISCHIO ALTO",ex:"Emmer, Clark, Durbin"},
+             {tier:3,icon:"🏛️",title:"COMMITTEE",why:"Ricevono briefing classificati sui settori dove investono.",risk:"RISCHIO ALTO",ex:"Jordan, Tuberville, Schiff"},
+             {tier:4,icon:"📈",title:"TOP TRADER",why:"Rendimenti anomali documentati (+50-100% annuo).",risk:"TRACK RECORD",ex:"Crenshaw, Rouzer, Davidson"},
+            ].map(function(item){
+              var s=TIER_STYLE[item.tier];
+              return h("div",{key:item.tier,style:{background:s.bg,border:"1px solid "+s.border,borderTop:"3px solid "+s.color,borderRadius:"3px",padding:"12px"}},
+                h("div",{style:{display:"flex",alignItems:"center",gap:"8px",marginBottom:"8px"}},
+                  h("span",{style:{fontSize:"14px"}},item.icon),
+                  h("span",{style:{fontSize:"11px",color:s.color,fontWeight:"bold"}},item.title)
+                ),
+                h("p",{style:{fontSize:"11px",color:"#8AA0C0",margin:"0 0 8px 0",lineHeight:"1.5"}},item.why),
+                h("div",{style:{fontSize:"10px",color:s.color,marginBottom:"4px"}},"⚠ "+item.risk),
+                h("div",{style:{fontSize:"10px",color:"#4A6A9A",fontStyle:"italic"}},"es. "+item.ex)
               );
-            })}
-          </div>
-          <div style={{ marginTop: "12px", padding: "8px 12px", background: "#080C18", border: "1px solid #1A2A4A", borderRadius: "3px", fontSize: "11px", color: "#4A6A9A", lineHeight: "1.6" }}>
-            💡 Concentrati sulle operazioni da <strong style={{ color: "#FFB347" }}>$100K+</strong> dei membri LEADERSHIP e COMMITTEE, specialmente quando il settore corrisponde alla loro commissione. I leader del Congresso battono il mercato fino al <strong style={{ color: "#FFB347" }}>47% annuo</strong> dopo aver assunto ruoli di potere (NBER, 2025).
-          </div>
-        </div>
-
-        {/* FILTRI */}
-        <div style={{ background: "#0A0F1E", border: "1px solid #1A2A4A", borderRadius: "4px", padding: "16px", marginBottom: "20px", display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr 1fr", gap: "12px" }}>
-          <div>
-            <label style={{ fontSize: "10px", color: "#4A6A9A", letterSpacing: "0.15em", display: "block", marginBottom: "6px" }}>MEMBRO / TICKER</label>
-            <input type="text" placeholder="es. Pelosi, AAPL…" value={filters.member}
-              onChange={function(e) { setFilters(function(f) { return Object.assign({}, f, { member: e.target.value }); }); }}
-              style={{ width: "100%", background: "#050810", border: "1px solid #1A2A4A", color: "#C8D8F0", padding: "8px 10px", fontSize: "12px", fontFamily: "'Courier New', monospace", borderRadius: "2px", boxSizing: "border-box", outline: "none" }}
-            />
-          </div>
-          <div>
-            <label style={{ fontSize: "10px", color: "#4A6A9A", letterSpacing: "0.15em", display: "block", marginBottom: "6px" }}>SETTORE</label>
-            <select value={filters.sector} onChange={function(e) { setFilters(function(f) { return Object.assign({}, f, { sector: e.target.value }); }); }}
-              style={{ width: "100%", background: "#050810", border: "1px solid #1A2A4A", color: "#C8D8F0", padding: "8px 10px", fontSize: "12px", fontFamily: "'Courier New', monospace", borderRadius: "2px", boxSizing: "border-box", outline: "none" }}>
-              <option>All</option>
-              {Object.keys(SECTORS).map(function(s) { return <option key={s}>{s}</option>; })}
-              <option>Other</option>
-            </select>
-          </div>
-          <div>
-            <label style={{ fontSize: "10px", color: "#4A6A9A", letterSpacing: "0.15em", display: "block", marginBottom: "6px" }}>TIPO</label>
-            <select value={filters.type} onChange={function(e) { setFilters(function(f) { return Object.assign({}, f, { type: e.target.value }); }); }}
-              style={{ width: "100%", background: "#050810", border: "1px solid #1A2A4A", color: "#C8D8F0", padding: "8px 10px", fontSize: "12px", fontFamily: "'Courier New', monospace", borderRadius: "2px", boxSizing: "border-box", outline: "none" }}>
-              <option value="All">Tutti</option>
-              <option value="Purchase">Solo Acquisti</option>
-              <option value="Sale">Solo Vendite</option>
-            </select>
-          </div>
-          <div>
-            <label style={{ fontSize: "10px", color: "#4A6A9A", letterSpacing: "0.15em", display: "block", marginBottom: "6px" }}>VOLUME MINIMO</label>
-            <select value={filters.minAmount} onChange={function(e) { setFilters(function(f) { return Object.assign({}, f, { minAmount: Number(e.target.value) }); }); }}
-              style={{ width: "100%", background: "#050810", border: "1px solid #1A2A4A", color: "#C8D8F0", padding: "8px 10px", fontSize: "12px", fontFamily: "'Courier New', monospace", borderRadius: "2px", boxSizing: "border-box", outline: "none" }}>
-              <option value={0}>Qualsiasi</option>
-              <option value={100000}>$100K+ — Rilevante</option>
-              <option value={250000}>$250K+ — Significativo</option>
-              <option value={500000}>$500K+ — Alto</option>
-              <option value={1000000}>$1M+ — Critico</option>
-            </select>
-          </div>
-          <div>
-            <label style={{ fontSize: "10px", color: "#FFB347", letterSpacing: "0.15em", display: "block", marginBottom: "6px" }}>⚠ RISCHIO ABUSO</label>
-            <select value={filters.minRisk} onChange={function(e) { setFilters(function(f) { return Object.assign({}, f, { minRisk: e.target.value }); }); }}
-              style={{ width: "100%", background: "#050810", border: "1px solid #6A4000", color: "#FFB347", padding: "8px 10px", fontSize: "12px", fontFamily: "'Courier New', monospace", borderRadius: "2px", boxSizing: "border-box", outline: "none", fontWeight: "bold" }}>
-              <option value="All">Tutti i livelli</option>
-              <option value="MEDIO">🟡 Solo Medio+ (36+)</option>
-              <option value="ALTO">🔴 Solo Alto (66+)</option>
-            </select>
-          </div>
-        </div>
-
-        {/* STATS */}
-        {!loading && (
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: "12px", marginBottom: "20px" }}>
-            {[
-              { label: "OPERAZIONI TOTALI", value: filtered.length },
-              { label: "ACQUISTI",          value: filtered.filter(function(t) { return t.type === "Purchase"; }).length, color: "#00D4AA" },
-              { label: "VENDITE",           value: filtered.filter(function(t) { return isSale(t.type); }).length, color: "#FF4455" },
-              { label: "VOLUME EST.",       value: formatAmount(filtered.reduce(function(s, t) { return s + t.amountNum; }, 0)), color: "#FFB347" },
-            ].map(function(stat) {
-              return (
-                <div key={stat.label} style={{ background: "#0A0F1E", border: "1px solid #1A2A4A", padding: "14px 16px", borderRadius: "4px" }}>
-                  <div style={{ fontSize: "10px", color: "#4A6A9A", letterSpacing: "0.15em", marginBottom: "6px" }}>{stat.label}</div>
-                  <div style={{ fontSize: "22px", fontWeight: "bold", color: stat.color || "#E8F4FF" }}>{stat.value}</div>
-                </div>
-              );
-            })}
-          </div>
-        )}
-
-        {/* TABELLA */}
-        <div style={{ background: "#0A0F1E", border: "1px solid #1A2A4A", borderRadius: "4px", overflow: "hidden" }}>
-          <div style={{ display: "grid", gridTemplateColumns: "100px 60px 185px 85px 155px 60px 65px 55px", padding: "8px 16px", borderBottom: "1px solid #1A2A4A", fontSize: "10px", color: "#4A6A9A", letterSpacing: "0.12em" }}>
-            <span>DATA</span><span>TICKER</span><span>MEMBRO</span><span>TIPO</span><span>IMPORTO</span>
-            <span>% PAT.</span><span>STRUMT.</span>
-            <span style={{ color: "#FFB347" }}>RISCHIO</span>
-          </div>
-
-          <div style={{ maxHeight: "500px", overflowY: "auto" }}>
-            {loading ? (
-              <div>
-                {Array.from({ length: 8 }).map(function(_, i) {
-                  return (
-                    <div key={i} style={{ display: "grid", gridTemplateColumns: "100px 60px 185px 85px 155px 60px 65px 55px", padding: "10px 16px", borderBottom: "1px solid #0D1426", background: i % 2 === 0 ? "#0A0F1E" : "#080C18", gap: "8px", alignItems: "center" }}>
-                      {[80, 40, 140, 70, 120, 40, 50, 30].map(function(w, j) {
-                        return <div key={j} style={{ height: "10px", borderRadius: "2px", background: "#0D1A2E", width: w + "px", animation: "pulse 1.5s ease-in-out infinite", animationDelay: (i * 0.05 + j * 0.03) + "s" }} />;
-                      })}
-                    </div>
+            })
+          ),
+          h("div",{style:{marginTop:"12px",padding:"8px 12px",background:"#080C18",border:"1px solid #1A2A4A",borderRadius:"3px",fontSize:"11px",color:"#4A6A9A",lineHeight:"1.6"}},
+            "💡 Concentrati sulle operazioni da ",h("strong",{style:{color:"#FFB347"}},"$100K+")," dei membri LEADERSHIP e COMMITTEE, specialmente quando il settore corrisponde alla loro commissione. I leader del Congresso battono il mercato fino al ",h("strong",{style:{color:"#FFB347"}},"47% annuo")," (NBER, 2025)."
+          )
+        ),
+        // Filters
+        h("div",{style:{background:"#0A0F1E",border:"1px solid #1A2A4A",borderRadius:"4px",padding:"16px",marginBottom:"20px",display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr 1fr",gap:"12px"}},
+          h("div",null,
+            h("label",{style:{fontSize:"10px",color:"#4A6A9A",letterSpacing:"0.15em",display:"block",marginBottom:"6px"}},"MEMBRO / TICKER"),
+            h("input",{type:"text",placeholder:"es. Pelosi, AAPL…",value:filters.member,
+              onChange:function(e){setFilters(function(f){return Object.assign({},f,{member:e.target.value});});},
+              style:{width:"100%",background:"#050810",border:"1px solid #1A2A4A",color:"#C8D8F0",padding:"8px 10px",fontSize:"12px",borderRadius:"2px",boxSizing:"border-box",outline:"none"}})
+          ),
+          h("div",null,
+            h("label",{style:{fontSize:"10px",color:"#4A6A9A",letterSpacing:"0.15em",display:"block",marginBottom:"6px"}},"SETTORE"),
+            h("select",{value:filters.sector,onChange:function(e){setFilters(function(f){return Object.assign({},f,{sector:e.target.value});});},
+              style:{width:"100%",background:"#050810",border:"1px solid #1A2A4A",color:"#C8D8F0",padding:"8px 10px",fontSize:"12px",borderRadius:"2px",outline:"none"}},
+              h("option",{value:"All"},"All"),
+              Object.keys(SECTORS).map(function(s){return h("option",{key:s,value:s},s);}),
+              h("option",{value:"Other"},"Other")
+            )
+          ),
+          h("div",null,
+            h("label",{style:{fontSize:"10px",color:"#4A6A9A",letterSpacing:"0.15em",display:"block",marginBottom:"6px"}},"TIPO"),
+            h("select",{value:filters.type||"All",onChange:function(e){setFilters(function(f){return Object.assign({},f,{type:e.target.value});});},
+              style:{width:"100%",background:"#050810",border:"1px solid #1A2A4A",color:"#C8D8F0",padding:"8px 10px",fontSize:"12px",borderRadius:"2px",outline:"none"}},
+              h("option",{value:"All"},"Tutti"),
+              h("option",{value:"Purchase"},"Solo Acquisti"),
+              h("option",{value:"Sale"},"Solo Vendite")
+            )
+          ),
+          h("div",null,
+            h("label",{style:{fontSize:"10px",color:"#4A6A9A",letterSpacing:"0.15em",display:"block",marginBottom:"6px"}},"VOLUME MINIMO"),
+            h("select",{value:filters.minAmount,onChange:function(e){setFilters(function(f){return Object.assign({},f,{minAmount:Number(e.target.value)});});},
+              style:{width:"100%",background:"#050810",border:"1px solid #1A2A4A",color:"#C8D8F0",padding:"8px 10px",fontSize:"12px",borderRadius:"2px",outline:"none"}},
+              h("option",{value:0},"Qualsiasi"),
+              h("option",{value:100000},"$100K+ — Rilevante"),
+              h("option",{value:250000},"$250K+ — Significativo"),
+              h("option",{value:500000},"$500K+ — Alto"),
+              h("option",{value:1000000},"$1M+ — Critico")
+            )
+          ),
+          h("div",null,
+            h("label",{style:{fontSize:"10px",color:"#FFB347",letterSpacing:"0.15em",display:"block",marginBottom:"6px"}},"⚠ RISCHIO ABUSO"),
+            h("select",{value:filters.minRisk,onChange:function(e){setFilters(function(f){return Object.assign({},f,{minRisk:e.target.value});});},
+              style:{width:"100%",background:"#050810",border:"1px solid #6A4000",color:"#FFB347",fontWeight:"bold",padding:"8px 10px",fontSize:"12px",borderRadius:"2px",outline:"none"}},
+              h("option",{value:"All"},"Tutti i livelli"),
+              h("option",{value:"MEDIO"},"🟡 Solo Medio+ (36+)"),
+              h("option",{value:"ALTO"},"🔴 Solo Alto (66+)")
+            )
+          )
+        ),
+        // Stats
+        !loading&&h("div",{style:{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:"12px",marginBottom:"20px"}},
+          [{label:"OPERAZIONI",val:filtered.length},{label:"ACQUISTI",val:filtered.filter(function(t){return t.type==="Purchase";}).length,color:"#00D4AA"},
+           {label:"VENDITE",val:filtered.filter(function(t){return isSale(t.type);}).length,color:"#FF4455"},
+           {label:"VOLUME EST.",val:fmtAmt(filtered.reduce(function(s,t){return s+t.amountNum;},0)),color:"#FFB347"}
+          ].map(function(s){return h("div",{key:s.label,style:{background:"#0A0F1E",border:"1px solid #1A2A4A",padding:"14px 16px",borderRadius:"4px"}},
+            h("div",{style:{fontSize:"10px",color:"#4A6A9A",letterSpacing:"0.15em",marginBottom:"6px"}},s.label),
+            h("div",{style:{fontSize:"22px",fontWeight:"bold",color:s.color||"#E8F4FF"}},s.val)
+          );})
+        ),
+        // Table
+        h("div",{style:{background:"#0A0F1E",border:"1px solid #1A2A4A",borderRadius:"4px",overflow:"hidden"}},
+          h("div",{style:{display:"grid",gridTemplateColumns:"110px 80px 1fr 160px 65px 55px",padding:"8px 16px",borderBottom:"1px solid #1A2A4A",fontSize:"10px",color:"#4A6A9A",letterSpacing:"0.12em"}},
+            h("span",null,"DATA"),h("span",null,"TICKER"),h("span",null,"MEMBRO"),
+            h("span",null,"IMPORTO"),h("span",null,"STRUMT."),h("span",{style:{color:"#FFB347"}},"RISCHIO")
+          ),
+          h("div",{style:{maxHeight:"500px",overflowY:"auto"}},
+            loading
+              ? h("div",null,Array.from({length:8}).map(function(_,i){
+                  return h("div",{key:i,style:{display:"grid",gridTemplateColumns:"110px 80px 1fr 160px 65px 55px",padding:"10px 16px",borderBottom:"1px solid #0D1426",background:i%2===0?"#0A0F1E":"#080C18",gap:"8px",alignItems:"center"}},
+                    [90,60,160,130,45,40].map(function(w,j){return h("div",{key:j,style:{height:"10px",borderRadius:"2px",background:"#0D1A2E",width:w+"px",animation:"pulse 1.5s ease-in-out infinite",animationDelay:(i*0.05+j*0.03)+"s"}});})
                   );
-                })}
-              </div>
-            ) : filtered.length === 0 ? (
-              <div style={{ padding: "40px", textAlign: "center", color: "#4A6A9A" }}>Nessuna operazione trovata con i filtri attuali.</div>
-            ) : filtered.slice(0, 100).map(function(t, i) {
-              var ts = t.tier > 0 ? TIER_STYLE[t.tier] : null;
-              var rowBg = t.isNew ? "#0A1A0E" : ts ? ts.bg : i % 2 === 0 ? "#0A0F1E" : "#080C18";
-              var leftBorder = ts ? "3px solid " + ts.color : t.isNew ? "3px solid #00D4AA" : "3px solid transparent";
-              return (
-                <div key={t.id} className="trade-row" onClick={function() { setSelectedTrade(t); fetchTickerDetail(t.ticker); }}
-                  style={{ display: "grid", gridTemplateColumns: "100px 60px 185px 85px 155px 60px 65px 55px", padding: "9px 16px", borderBottom: "1px solid #0D1426", borderLeft: leftBorder, background: rowBg, alignItems: "center", fontSize: "12px", cursor: "pointer" }}>
-                  <span style={{ color: "#4A6A9A", fontSize: "11px" }}>{t.transaction_date}</span>
-                  <span style={{ color: "#E8F4FF", fontWeight: "bold", background: "#1A2A4A", padding: "2px 6px", borderRadius: "2px", display: "inline-block", fontSize: "11px" }}>{t.ticker}</span>
-                  <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                    <span style={{ color: ts ? ts.color : "#C8D8F0", fontWeight: ts ? "bold" : "normal" }}>{t.representative}</span>
-                    {ts && <span style={{ marginLeft: "6px", fontSize: "9px", color: ts.color, border: "1px solid " + ts.border, background: ts.bg, padding: "1px 5px", borderRadius: "2px", verticalAlign: "middle" }}>{ts.label}</span>}
-                    {t.isNew && <span className="new-badge" style={{ marginLeft: "6px", fontSize: "9px", color: "#00D4AA", border: "1px solid #00D4AA", padding: "1px 5px", borderRadius: "2px" }}>NEW</span>}
-                  </span>
-                  <span style={{ color: isSale(t.type) ? "#FF4455" : "#00D4AA", fontWeight: "bold", fontSize: "11px" }}>
-                    {isSale(t.type) ? "▼" : "▲"} {(t.type || "").replace("Sale (Full)", "Vend.").replace("Sale (Partial)", "Vend.P.").replace("Purchase", "Acq.").replace("Exchange", "Scamb.")}
-                  </span>
-                  <span style={{ color: "#FFB347", fontSize: "11px" }}>{t.amount}</span>
-                  <span style={{ fontSize: "11px", fontWeight: "bold", color: t.wealthPct ? (t.wealthPct >= 5 ? "#FF4455" : t.wealthPct >= 1 ? "#FFB347" : "#8AA0C0") : "#2A3A5A" }}>
-                    {t.wealthPct ? formatPct(t.wealthPct) : "—"}
-                  </span>
-                  <span style={{ fontSize: "10px", fontWeight: "bold", color: t.instrument ? t.instrument.color : "#4A6A9A", background: "#0D1426", padding: "2px 4px", borderRadius: "2px", textAlign: "center" }}>
-                    {t.instrument ? t.instrument.label : "—"}
-                  </span>
-                  {/* SEMAFORO ANOMALIA */}
-                  <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "2px" }}>
-                    <div style={{
-                      width: "28px", height: "28px", borderRadius: "50%",
-                      background: t.anomaly ? t.anomaly.color : "#2A3A5A",
-                      boxShadow: t.anomaly && t.anomaly.score >= 66 ? "0 0 8px " + t.anomaly.color : "none",
-                      display: "flex", alignItems: "center", justifyContent: "center",
-                      fontSize: "9px", fontWeight: "bold", color: "#050810",
-                    }}>
-                      {t.anomaly ? t.anomaly.score : "?"}
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
+                }))
+              : filtered.length===0
+                ? h("div",{style:{padding:"40px",textAlign:"center",color:"#4A6A9A"}},"Nessuna operazione trovata.")
+                : filtered.slice(0,100).map(function(t,i){
+                    var ts2=t.tier>0?TIER_STYLE[t.tier]:null;
+                    var rowBg=t.isNew?"#0A1A0E":ts2?ts2.bg:i%2===0?"#0A0F1E":"#080C18";
+                    var lb=ts2?"3px solid "+ts2.color:t.isNew?"3px solid #00D4AA":"3px solid transparent";
+                    var ac=t.anomaly;
+                    return h("div",{key:t.id,className:"trade-row",onClick:function(){setSelectedTrade(t);fetchTickerDetail(t.ticker);},
+                      style:{display:"grid",gridTemplateColumns:"110px 80px 1fr 160px 65px 55px",padding:"9px 16px",borderBottom:"1px solid #0D1426",borderLeft:lb,background:rowBg,alignItems:"center",fontSize:"12px"}},
+                      h("span",{style:{color:"#4A6A9A",fontSize:"11px"}},t.transaction_date),
+                      h("span",{style:{color:isSale(t.type)?"#FF4455":"#00D4AA",fontWeight:"bold",background:"#1A2A4A",padding:"2px 6px",borderRadius:"2px",display:"inline-block",fontSize:"11px"}},(isSale(t.type)?"▼ ":"▲ ")+t.ticker),
+                      h("span",{style:{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},
+                        h("span",{style:{color:ts2?ts2.color:"#C8D8F0",fontWeight:ts2?"bold":"normal"}},t.representative),
+                        ts2&&h("span",{style:{marginLeft:"6px",fontSize:"9px",color:ts2.color,border:"1px solid "+ts2.border,background:ts2.bg,padding:"1px 5px",borderRadius:"2px",verticalAlign:"middle"}},ts2.label),
+                        t.isNew&&h("span",{className:"new-badge",style:{marginLeft:"6px",fontSize:"9px",color:"#00D4AA",border:"1px solid #00D4AA",padding:"1px 5px",borderRadius:"2px"}},"NEW")
+                      ),
+                      h("span",{style:{color:"#FFB347",fontSize:"11px"}},t.amount),
+                      h("span",{style:{fontSize:"10px",fontWeight:"bold",color:t.instrument?t.instrument.color:"#4A6A9A",background:"#0D1426",padding:"2px 4px",borderRadius:"2px",textAlign:"center"}},t.instrument?t.instrument.label:"—"),
+                      h("div",{style:{display:"flex",justifyContent:"center"}},
+                        h("div",{style:{width:"28px",height:"28px",borderRadius:"50%",background:ac?ac.color:"#2A3A5A",
+                          boxShadow:ac&&ac.score>=66?"0 0 8px "+ac.color:"none",
+                          display:"flex",alignItems:"center",justifyContent:"center",
+                          fontSize:"9px",fontWeight:"bold",color:"#050810"}},ac?ac.score:"?")
+                      )
+                    );
+                  })
+          )
+        ),
+        h("div",{style:{marginTop:"12px",textAlign:"center",fontSize:"10px",color:"#2A3A5A"}},"DATI PUBBLICI AI SENSI DELLO STOCK ACT (2012) · HOUSE STOCK WATCHER · SOLO A SCOPO INFORMATIVO")
+      )
+    );
+  }
 
-        <div style={{ marginTop: "12px", textAlign: "center", fontSize: "10px", color: "#2A3A5A" }}>
-          DATI PUBBLICI AI SENSI DELLO STOCK ACT (2012) · HOUSE STOCK WATCHER · SOLO A SCOPO INFORMATIVO
-        </div>
-      </div>
-    </div>
+  // ── Detail Modal ──────────────────────────────────────────────────────────
+  function DetailModal(){
+    if(!selectedTrade) return null;
+    var t=selectedTrade; var td=tickerDetail; var ts2=t.tier>0?TIER_STYLE[t.tier]:null; var ac=t.anomaly;
+    return h("div",{style:{position:"fixed",inset:0,background:"rgba(0,0,0,0.88)",zIndex:100,display:"flex",alignItems:"center",justifyContent:"center"},
+      onClick:function(){setSelectedTrade(null);setTickerDetail(null);}},
+      h("div",{style:{background:"#0A0F1E",border:"1px solid #1A2A4A",borderRadius:"6px",padding:"28px",width:"560px",maxWidth:"95vw",maxHeight:"90vh",overflowY:"auto"},onClick:function(e){e.stopPropagation();}},
+        // Header
+        h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:"20px"}},
+          h("div",null,
+            h("div",{style:{fontSize:"10px",color:"#4A6A9A",letterSpacing:"0.2em",marginBottom:"4px"}},"DETTAGLIO OPERAZIONE"),
+            h("div",{style:{fontSize:"24px",fontWeight:"bold",color:"#E8F4FF"}},t.ticker),
+            detailLoading&&h("div",{style:{fontSize:"11px",color:"#4A6A9A",animation:"pulse 1s ease-in-out infinite"}},"Caricamento..."),
+            td&&!detailLoading&&h("div",{style:{fontSize:"13px",color:"#8AA0C0",marginTop:"2px"}},td.longName)
+          ),
+          h("button",{onClick:function(){setSelectedTrade(null);setTickerDetail(null);},style:{background:"transparent",border:"1px solid #1A2A4A",color:"#4A6A9A",width:"28px",height:"28px",borderRadius:"2px",cursor:"pointer",fontSize:"14px"}},"✕")
+        ),
+        // ISIN
+        td&&h("div",null,
+          h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:"10px",marginBottom:"14px"}},
+            [{label:"ISIN",val:td.isin,color:td.isin?"#00D4AA":null},
+             {label:"CUSIP",val:td.cusip,color:td.cusip?"#00C8FF":null},
+             {label:"EXCHANGE",val:td.exchange,color:"#8AA0C0"}
+            ].map(function(it){return h("div",{key:it.label,style:{background:"#080C18",border:"1px solid "+(it.color?it.color+"44":"#1A2A4A"),padding:"10px 12px",borderRadius:"3px",borderTop:"2px solid "+(it.color||"#1A2A4A")}},
+              h("div",{style:{fontSize:"9px",color:"#4A6A9A",letterSpacing:"0.15em",marginBottom:"5px"}},it.label),
+              h("div",{style:{fontSize:"11px",color:it.val?(it.color||"#C8D8F0"):"#2A3A5A",fontWeight:"bold",fontFamily:"monospace",wordBreak:"break-all"}},it.val||"Non disponibile")
+            );})
+          ),
+          h("div",{style:{background:"#080C18",border:"1px solid #1A2A4A",borderLeft:"3px solid #4A6A9A",padding:"10px 14px",borderRadius:"3px",marginBottom:"14px",fontSize:"11px",color:"#8AA0C0",lineHeight:"1.6"}},td.description)
+        ),
+        // Anomaly score
+        ac&&h("div",{style:{background:ac.bg,border:"1px solid "+ac.border,borderRadius:"4px",padding:"16px",marginBottom:"20px"}},
+          h("div",{style:{display:"flex",alignItems:"center",gap:"16px",marginBottom:"14px"}},
+            h("div",{style:{width:"56px",height:"56px",borderRadius:"50%",background:ac.color,display:"flex",alignItems:"center",justifyContent:"center",fontSize:"18px",fontWeight:"bold",color:"#050810",boxShadow:"0 0 16px "+ac.color+"88",flexShrink:0}},ac.score),
+            h("div",null,
+              h("div",{style:{fontSize:"10px",color:"#4A6A9A",letterSpacing:"0.2em",marginBottom:"4px"}},"INDICE ANOMALIA INSIDER"),
+              h("div",{style:{fontSize:"20px",fontWeight:"bold",color:ac.color}},"RISCHIO "+ac.level),
+              h("div",{style:{fontSize:"11px",color:"#4A6A9A",marginTop:"2px"}},"Commissione "+ac.breakdown.committee+"/40 · Timing "+ac.breakdown.timing+"/35 · Volume "+ac.breakdown.volume+"/25 · Leva "+ac.breakdown.leverage+"/10")
+            )
+          ),
+          ac.reasons.length>0&&h("div",{style:{borderTop:"1px solid "+ac.border,paddingTop:"12px"}},
+            h("div",{style:{fontSize:"10px",color:"#4A6A9A",letterSpacing:"0.15em",marginBottom:"8px"}},"FATTORI RILEVATI"),
+            ac.reasons.map(function(r,i){return h("div",{key:i,style:{fontSize:"11px",color:"#8AA0C0",marginBottom:"6px",lineHeight:"1.5",paddingLeft:"4px",borderLeft:"2px solid "+ac.color+"66"}},r);})
+          )
+        ),
+        h("div",{style:{borderTop:"1px solid #1A2A4A",marginBottom:"20px"}}),
+        // Trade details
+        h("div",{style:{fontSize:"10px",color:"#4A6A9A",letterSpacing:"0.2em",marginBottom:"12px"}},"DATI OPERAZIONE DICHIARATA"),
+        h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"10px",marginBottom:"20px"}},
+          [{label:"MEMBRO",val:t.representative},
+           {label:"RUOLO",val:t.role||"Membro del Congresso",isRole:true},
+           {label:"DATA",val:t.transaction_date},
+           {label:"TIPO",val:t.type},
+           {label:"IMPORTO",val:t.amount,color:"#FFB347"},
+           {label:"SETTORE",val:t.sector}
+          ].map(function(it){return h("div",{key:it.label,style:{background:ts2&&it.isRole?ts2.bg:"#080C18",border:"1px solid "+(ts2&&it.isRole?ts2.border:"#1A2A4A"),padding:"10px 12px",borderRadius:"3px"}},
+            h("div",{style:{fontSize:"9px",color:"#4A6A9A",letterSpacing:"0.15em",marginBottom:"4px"}},it.label),
+            h("div",{style:{fontSize:"12px",color:it.color||(ts2&&it.isRole?ts2.color:"#C8D8F0"),fontWeight:it.color||(ts2&&it.isRole)?"bold":"normal"}},it.val||"—")
+          );})
+        ),
+        // Instrument
+        t.instrument&&h("div",{style:{background:"#080C18",border:"1px solid "+t.instrument.color+"44",borderLeft:"3px solid "+t.instrument.color,padding:"10px 14px",borderRadius:"3px",marginBottom:"16px",display:"flex",alignItems:"center",gap:"10px"}},
+          h("span",{style:{fontSize:"13px",fontWeight:"bold",color:t.instrument.color,fontFamily:"monospace"}},t.instrument.label),
+          h("span",{style:{fontSize:"11px",color:"#8AA0C0"}},t.instrument.desc)
+        ),
+        // Add to portfolio button
+        h("button",{onClick:function(){
+          setAddTradeModal(t);
+          setInvestAmt("");
+          setEntryPriceStr("");
+          fetch(PRICE_PROXY+'?ticker='+t.ticker)
+            .then(function(r){return r.ok?r.json():Promise.reject();})
+            .then(function(data){
+              if(data.ok&&data.price){
+                var u={};u[t.ticker]=data.price;
+                setLivePrices(function(p){return Object.assign({},p,u);});
+                setEntryPriceStr(data.price.toFixed(2));
+              }
+            }).catch(function(){});
+        },style:{width:"100%",background:"#00D4AA",color:"#050810",border:"none",padding:"12px",fontSize:"13px",fontWeight:"bold",cursor:"pointer",borderRadius:"3px",marginBottom:"16px",letterSpacing:"0.1em"}},"+ AGGIUNGI AL PORTFOLIO SIMULATO"),
+        // External links
+        h("div",{style:{fontSize:"10px",color:"#4A6A9A",letterSpacing:"0.15em",marginBottom:"8px"}},"RISORSE ESTERNE"),
+        h("div",{style:{display:"flex",gap:"8px",flexWrap:"wrap"}},
+          [{label:"Yahoo Finance",url:"https://finance.yahoo.com/quote/"+t.ticker},
+           {label:"OpenFIGI",url:"https://www.openfigi.com/search#!?simpleSearchString="+t.ticker},
+           {label:"Capitol Trades",url:"https://www.capitoltrades.com/trades?ticker="+t.ticker},
+          ].map(function(lk){return h("a",{key:lk.label,href:lk.url,target:"_blank",rel:"noreferrer",style:{background:"#0D1426",border:"1px solid #1A2A4A",color:"#00C8FF",padding:"6px 12px",fontSize:"11px",borderRadius:"2px",textDecoration:"none"}},lk.label+" ↗");})
+        )
+      )
+    );
+  }
+
+  // ── Add to Portfolio Modal ────────────────────────────────────────────────
+  function AddTradeModal(){
+    if(!addTradeModal) return null;
+    var t=addTradeModal; var lp=livePrices[t.ticker];
+    var shares=parseFloat(investAmt)>0&&parseFloat(entryPriceStr)>0?(parseFloat(investAmt)/parseFloat(entryPriceStr)).toFixed(4):"—";
+    return h("div",{style:{position:"fixed",inset:0,background:"rgba(0,0,0,0.92)",zIndex:200,display:"flex",alignItems:"center",justifyContent:"center"}},
+      h("div",{style:{background:"#0A0F1E",border:"1px solid #00D4AA",borderRadius:"6px",padding:"28px",width:"420px",maxWidth:"95vw"}},
+        h("div",{style:{fontSize:"10px",color:"#4A6A9A",letterSpacing:"0.2em",marginBottom:"6px"}},"PORTFOLIO SIMULATO"),
+        h("h2",{style:{margin:"0 0 6px",color:"#E8F4FF",fontSize:"18px"}},(isSale(t.type)?"▼ ":"▲ ")+t.ticker),
+        h("div",{style:{fontSize:"12px",color:"#4A6A9A",marginBottom:"20px"}},t.representative+" · "+t.transaction_date),
+        h("div",{style:{marginBottom:"16px"}},
+          h("label",{style:{fontSize:"10px",color:"#4A6A9A",letterSpacing:"0.15em",display:"block",marginBottom:"6px"}},"QUANTO VUOI INVESTIRE ($)"),
+          h("input",{type:"number",placeholder:"es. 1000",value:investAmt,onChange:function(e){setInvestAmt(e.target.value);},style:{width:"100%",background:"#050810",border:"1px solid #1A2A4A",color:"#E8F4FF",padding:"10px 12px",fontSize:"14px",borderRadius:"2px",boxSizing:"border-box",outline:"none"}}),
+          h("div",{style:{fontSize:"10px",color:"#4A6A9A",marginTop:"5px"}},"Liquidità: ",h("span",{style:{color:"#00D4AA"}},"$"+cash.toLocaleString()))
+        ),
+        h("div",{style:{marginBottom:"20px"}},
+          h("label",{style:{fontSize:"10px",color:"#4A6A9A",letterSpacing:"0.15em",display:"block",marginBottom:"6px"}},"PREZZO DI ENTRATA ($)"),
+          h("input",{type:"number",placeholder:lp?"Live: $"+lp.toFixed(2):"Inserisci manualmente",value:entryPriceStr,onChange:function(e){setEntryPriceStr(e.target.value);},style:{width:"100%",background:"#050810",border:"1px solid #1A2A4A",color:"#E8F4FF",padding:"10px 12px",fontSize:"14px",borderRadius:"2px",boxSizing:"border-box",outline:"none"}}),
+          lp&&!entryPriceStr&&h("button",{onClick:function(){setEntryPriceStr(lp.toFixed(2));},style:{marginTop:"6px",background:"transparent",border:"1px solid #1A2A4A",color:"#00D4AA",padding:"4px 10px",fontSize:"11px",cursor:"pointer",borderRadius:"2px"}},"Usa prezzo live $"+lp.toFixed(2))
+        ),
+        investAmt&&entryPriceStr&&h("div",{style:{background:"#080C18",border:"1px solid #1A2A4A",padding:"10px 14px",borderRadius:"3px",marginBottom:"16px",fontSize:"12px",color:"#8AA0C0"}},
+          "Acquisteresti ",h("strong",{style:{color:"#E8F4FF"}},shares+" azioni")," di "+t.ticker+" a $"+parseFloat(entryPriceStr).toFixed(2)
+        ),
+        h("div",{style:{display:"flex",gap:"10px"}},
+          h("button",{onClick:function(){
+            var amt=parseFloat(investAmt); var price=parseFloat(entryPriceStr)||(livePrices[t.ticker]||0);
+            if(amt>0&&price>0){addToPortfolio(t,amt,price);setAddTradeModal(null);setPage("portfolio");}
+          },style:{flex:1,background:"#00D4AA",color:"#050810",border:"none",padding:"12px",fontSize:"13px",fontWeight:"bold",cursor:"pointer",borderRadius:"2px"}},"AGGIUNGI"),
+          h("button",{onClick:function(){setAddTradeModal(null);},style:{background:"transparent",color:"#4A6A9A",border:"1px solid #1A2A4A",padding:"12px 16px",fontSize:"12px",cursor:"pointer",borderRadius:"2px"}},"Annulla")
+        )
+      )
+    );
+  }
+
+  // ── Setup Modal ───────────────────────────────────────────────────────────
+  function SetupModal(){
+    if(!showSetup) return null;
+    return h("div",{style:{position:"fixed",inset:0,background:"rgba(0,0,0,0.85)",zIndex:100,display:"flex",alignItems:"center",justifyContent:"center"}},
+      h("div",{style:{background:"#0A0F1E",border:"1px solid #1A2A4A",borderRadius:"6px",padding:"28px",width:"480px",maxWidth:"95vw"}},
+        h("div",{style:{fontSize:"11px",color:"#4A6A9A",letterSpacing:"0.2em",marginBottom:"6px"}},"CONFIGURAZIONE API"),
+        h("h2",{style:{margin:"0 0 20px",color:"#E8F4FF",fontSize:"16px"}},"Connetti le sorgenti dati live"),
+        h("div",{style:{marginBottom:"20px"}},
+          h("label",{style:{fontSize:"11px",color:"#00C8FF",display:"block",marginBottom:"6px"}},"CONGRESS.GOV API KEY"),
+          h("input",{type:"password",placeholder:"Incolla la tua API key…",value:keyDraft.congress,
+            onChange:function(e){setKeyDraft(function(d){return Object.assign({},d,{congress:e.target.value});});},
+            style:{width:"100%",background:"#050810",border:"1px solid #1A2A4A",color:"#C8D8F0",padding:"9px 12px",fontSize:"12px",borderRadius:"2px",boxSizing:"border-box",outline:"none"}}),
+          h("div",{style:{fontSize:"10px",color:"#4A6A9A",marginTop:"5px"}},"Gratuita → api.congress.gov/sign-up")
+        ),
+        h("div",{style:{marginBottom:"24px"}},
+          h("label",{style:{fontSize:"11px",color:"#C084FC",display:"block",marginBottom:"6px"}},"QUIVER QUANTITATIVE API KEY"),
+          h("input",{type:"password",placeholder:"Incolla la tua API key…",value:keyDraft.quiver,
+            onChange:function(e){setKeyDraft(function(d){return Object.assign({},d,{quiver:e.target.value});});},
+            style:{width:"100%",background:"#050810",border:"1px solid #1A2A4A",color:"#C8D8F0",padding:"9px 12px",fontSize:"12px",borderRadius:"2px",boxSizing:"border-box",outline:"none"}}),
+          h("div",{style:{fontSize:"10px",color:"#4A6A9A",marginTop:"5px"}},"Piano free → quiverquant.com")
+        ),
+        h("div",{style:{display:"flex",gap:"10px"}},
+          h("button",{onClick:function(){saveKeys(keyDraft);setKeys(Object.assign({},keyDraft));setShowSetup(false);},style:{flex:1,background:"#00D4AA",color:"#050810",border:"none",padding:"10px",fontSize:"12px",fontWeight:"bold",cursor:"pointer",borderRadius:"2px"}},"SALVA E CONNETTI"),
+          h("button",{onClick:function(){setShowSetup(false);},style:{background:"transparent",color:"#4A6A9A",border:"1px solid #1A2A4A",padding:"10px 16px",fontSize:"12px",cursor:"pointer",borderRadius:"2px"}},"Annulla")
+        )
+      )
+    );
+  }
+
+  // ── Main render ───────────────────────────────────────────────────────────
+  return h("div",{style:{background:"#050810",minHeight:"100vh",color:"#C8D8F0",fontFamily:"'Courier New',monospace"}},
+    // Nav
+    h("div",{style:{background:"#0A0F1E",borderBottom:"1px solid #1A2A4A",display:"flex",alignItems:"center",padding:"0 16px"}},
+      ["tracker","portfolio"].map(function(p){
+        var active=page===p;
+        var label=p==="tracker"?"📡 TRACKER":"💼 PORTFOLIO";
+        return h("button",{key:p,onClick:function(){setPage(p);},style:{background:"transparent",border:"none",borderBottom:active?"2px solid #00D4AA":"2px solid transparent",color:active?"#00D4AA":"#4A6A9A",padding:"14px 20px",fontSize:"11px",fontWeight:active?"bold":"normal",cursor:"pointer",letterSpacing:"0.15em",marginBottom:"-1px"}},label);
+      }),
+      portfolio.length>0&&h("span",{style:{marginLeft:"8px",background:"#00D4AA",color:"#050810",borderRadius:"10px",padding:"2px 8px",fontSize:"10px",fontWeight:"bold"}},portfolio.length)
+    ),
+    SetupModal(),
+    DetailModal(),
+    AddTradeModal(),
+    page==="portfolio"?h(PortfolioPage,null):h(TrackerPage,null)
   );
 }
 
+ReactDOM.createRoot(document.getElementById('root')).render(React.createElement(App, null));
 
-const root = ReactDOM.createRoot(document.getElementById('root'));
-root.render(React.createElement(App));
-</script>
-
-<!-- Registrazione Service Worker PWA -->
-<script>
-if ('serviceWorker' in navigator) {
-  window.addEventListener('load', function() {
-    navigator.serviceWorker.register('/Congress-Tracker/sw.js')
-      .then(function(reg) { console.log('SW registrato:', reg.scope); })
-      .catch(function(err) { console.warn('SW non registrato:', err); });
+if('serviceWorker' in navigator){
+  window.addEventListener('load',function(){
+    navigator.serviceWorker.register('/Congress-Tracker/sw.js').catch(function(){});
   });
 }
 </script>
