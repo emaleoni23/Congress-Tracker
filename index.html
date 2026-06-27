@@ -323,7 +323,7 @@ function App(){
   var PRICE_PROXY = 'https://wispy-cherry-6d83.sgv2v6cgz8.workers.dev';
 
   function fetchLivePrice(ticker){
-    if(!ticker||livePrices[ticker]) return;
+    if(!ticker) return;
     fetch(PRICE_PROXY+'?ticker='+ticker)
       .then(function(r){return r.ok?r.json():Promise.reject();})
       .then(function(data){
