@@ -446,9 +446,11 @@ function App(){
   // Portfolio helpers
   function addToPortfolio(trade,amount,price){
     var shares=price>0?amount/price:0;
+    var isShort=isSale(trade.type); // se il membro vende, tu vai short
     var pos={id:"pos-"+Date.now(),ticker:trade.ticker,member:trade.representative,
       sector:trade.sector,date:new Date().toISOString().split("T")[0],
       tradeDate:trade.transaction_date,invested:amount,entryPrice:price,shares:shares,
+      isShort:isShort, // true = posizione short (seguendo una vendita)
       anomalyScore:trade.anomaly?trade.anomaly.score:0,
       anomalyLevel:trade.anomaly?trade.anomaly.level:"—"};
     setPortfolio(function(p){var u=[pos].concat(p);savePortfolio(u);return u;});
@@ -472,8 +474,12 @@ function App(){
   // ── Portfolio page ────────────────────────────────────────────────────────
   function PortfolioPage(){
     var totInv=portfolio.reduce(function(s,p){return s+p.invested;},0);
-    var totCur=portfolio.reduce(function(s,p){var pr=livePrices[p.ticker]||p.entryPrice;return s+(p.shares*pr);},0);
-    var totPnl=totCur-totInv;
+    var totPnl=portfolio.reduce(function(s,p){
+      var pr=livePrices[p.ticker]||p.entryPrice;
+      var cv=p.shares*pr;
+      return s+(p.isShort?(p.invested-cv):(cv-p.invested));
+    },0);
+    var totCur=totInv+totPnl;
     var totPct=totInv>0?(totPnl/totInv)*100:0;
     return h("div",{style:{maxWidth:"1000px",margin:"0 auto",padding:"24px 16px"}},
       // Header
@@ -522,14 +528,17 @@ function App(){
         fetchLivePrice(pos.ticker);
         var lp=livePrices[pos.ticker]||pos.entryPrice;
         var cv=pos.shares*lp;
-        var pnl=cv-pos.invested;
+        // Long: guadagni se prezzo sale. Short: guadagni se prezzo scende
+        var pnl=pos.isShort ? (pos.invested - cv) : (cv - pos.invested);
         var pnlPct=pos.invested>0?(pnl/pos.invested)*100:0;
         var isP=pnl>=0;
+        var posLabel=pos.isShort?"▼ SHORT":"▲ LONG";
         return h("div",{key:pos.id,style:{background:"#0A0F1E",border:"1px solid #1A2A4A",borderLeft:"3px solid "+(isP?"#00D4AA":"#FF4455"),borderRadius:"4px",padding:"16px",marginBottom:"12px"}},
           h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:"10px"}},
             h("div",null,
               h("span",{style:{fontSize:"18px",fontWeight:"bold",color:"#E8F4FF",marginRight:"10px"}},pos.ticker),
-              h("span",{style:{fontSize:"11px",color:"#4A6A9A"}},pos.sector),
+              h("span",{style:{fontSize:"11px",color:"#4A6A9A",marginRight:"8px"}},pos.sector),
+              h("span",{style:{fontSize:"10px",fontWeight:"bold",color:pos.isShort?"#FF4455":"#00D4AA",border:"1px solid",padding:"1px 6px",borderRadius:"2px",marginRight:"6px"}},posLabel),
               pos.anomalyLevel&&pos.anomalyLevel!=="—"&&h("span",{style:{marginLeft:"8px",fontSize:"10px",color:pos.anomalyLevel==="ALTO"?"#FF4455":"#FFB347",border:"1px solid",padding:"1px 6px",borderRadius:"2px"}},"⚠ "+pos.anomalyLevel)
             ),
             h("div",{style:{textAlign:"right"}},
